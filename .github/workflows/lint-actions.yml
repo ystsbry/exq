@@ -1,0 +1,23 @@
+name: Lint workflows
+
+# .github/workflows/ 配下のワークフロー定義を actionlint で静的検証する。
+# 構文エラー、存在しない context 参照、shell（shellcheck 連携）などを検出する。
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run actionlint
+        uses: docker://rhysd/actionlint:latest
+        with:
+          args: -color

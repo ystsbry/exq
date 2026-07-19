@@ -1,0 +1,172 @@
+name: ci
+
+# Pull Request と main への push で test / lint / format を並列に実行し、
+# それらが成功した後に build / build-make を並列に走らせる。
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    # PR にカバレッジレポートを sticky comment として post するため、
+    # この job だけ pull-requests: write を持たせる。
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go test with coverage
+        run: |
+          set -o pipefail
+          go test -coverprofile=coverage.out -covermode=atomic ./... \
+            | tee test-output.txt
+
+      - name: build coverage report
+        id: cov
+        run: |
+          total=$(go tool cover -func=coverage.out | grep "^total:" | awk '{print $NF}')
+          echo "total=$total" >> "$GITHUB_OUTPUT"
+          {
+            echo "report<<COVEOF"
+            echo
+            echo "<details>"
+            echo "<summary>Per-package coverage</summary>"
+            echo
+            echo '```'
+            grep -E "coverage:" test-output.txt || echo "(no per-package coverage output)"
+            echo '```'
+            echo
+            echo "</details>"
+            echo
+            echo "<details>"
+            echo "<summary>Per-function detail</summary>"
+            echo
+            echo '```'
+            go tool cover -func=coverage.out
+            echo '```'
+            echo
+            echo "</details>"
+            echo "COVEOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: generate HTML coverage report
+        run: go tool cover -html=coverage.out -o coverage.html
+
+      - name: upload coverage artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: |
+            coverage.out
+            coverage.html
+          retention-days: 14
+
+      - name: post coverage comment on PR
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: coverage
+          message: |
+            ## Coverage: ${{ steps.cov.outputs.total }}
+            ${{ steps.cov.outputs.report }}
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          # golangci-lint-action 側で独自にキャッシュするため、ここでは無効化する。
+          cache: false
+
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: latest
+
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "::error::gofmt found unformatted files:"
+            echo "$out"
+            exit 1
+          fi
+
+  # リリースターゲット (linux/darwin × amd64/arm64) 全てでクロスコンパイル可能か確認する。
+  # 「特定アーキで突然壊れる」事案を PR 段階でブロックすることが目的。
+  build:
+    needs: [test, lint, format]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, darwin]
+        goarch: [amd64, arm64]
+    env:
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go build
+        run: go build ./...
+
+  # Makefile 経由のビルドが壊れていないかをスモーク的に確認するジョブ。
+  # cgo guard もここで一度だけ動かす（grep するだけで GOOS/GOARCH に依存しないため）。
+  build-make:
+    needs: [test, lint, format]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: cgo guard (warning)
+        # リリースは CGO_ENABLED=0 固定 (.goreleaser.yaml) なので、
+        # `import "C"` が混入すると QEMU 環境などで再び壊れる。
+        # 強制 fail はせず、PR に warning annotation を出すに留める。
+        run: |
+          hits=$(grep -RIn --include='*.go' '^[[:space:]]*import[[:space:]]\+"C"' . || true)
+          if [ -n "$hits" ]; then
+            echo "::warning::cgo (import \"C\") を検出。リリースは CGO_ENABLED=0 のため CGO 依存コードは混入させない方針です。"
+            echo "$hits"
+          fi
+
+      - name: make build
+        run: make build

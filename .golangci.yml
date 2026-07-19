@@ -1,0 +1,26 @@
+# golangci-lint v2 設定
+# Docs: https://golangci-lint.run/usage/configuration/
+
+version: "2"
+
+run:
+  # 解析全体のタイムアウト
+  timeout: 5m
+
+linters:
+  # デフォルトの linter セットを明示する。
+  # "standard" は errcheck / govet / ineffassign / staticcheck / unused を有効化する。
+  default: standard
+
+  # linter ごとの細かい挙動はここで上書きする。
+  settings:
+    errcheck:
+      # CLI/TUI 出力系では Fprint 系の戻り値をチェックしてもユーザーに返せる
+      # 復旧手段が無いため、プロジェクト方針として除外する。
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintln
+        - fmt.Fprintf
+
+# formatter（gofmt / goimports など）は v2 から linter と分離された。
+# CI 側で gofmt を別ジョブとして見ているので、ここでは未設定。

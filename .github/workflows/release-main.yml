@@ -1,0 +1,102 @@
+name: release-main
+
+# main へのコード変更ごとに rolling preview release を作る。
+# .goreleaser.yaml の `prerelease: auto` により prerelease 扱いとなり、
+# GitHub の "Latest" は奪わない。古い main-track prerelease は直近 5 件
+# だけ残して release/tag ともに削除する。
+#
+# 正式バージョンは release/vX.x ブランチで手動タグを切り、既存の
+# release.yml が拾って stable リリースとして公開する。
+
+on:
+  push:
+    branches:
+      - main
+    # 本コードに影響しない変更ではリリースしない。
+    paths-ignore:
+      - '**/*.md'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.github/**'
+      - 'plugin/**'
+      - '.agents/**'
+
+permissions:
+  contents: write
+
+# 同時に複数の main push が来てもリリースを直列化する。
+# 進行中ジョブは止めず、後発を待たせる。
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Read NEXT_VERSION from .goreleaser.yaml
+        id: ver
+        run: |
+          next=$(yq '.env[] | select(test("^NEXT_VERSION=")) | sub("^NEXT_VERSION="; "")' .goreleaser.yaml)
+          if [[ ! "$next" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::NEXT_VERSION の形式が不正: '$next' (X.Y.Z 形式が必要)"
+            exit 1
+          fi
+          echo "next=$next" >> "$GITHUB_OUTPUT"
+
+      - name: Compute prerelease tag
+        id: tag
+        run: |
+          stamp=$(date -u +%Y%m%dT%H%M%SZ)
+          tag="v${{ steps.ver.outputs.next }}-pre.${stamp}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Push tag
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.tag.outputs.tag }}"
+          git push origin "${{ steps.tag.outputs.tag }}"
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_CURRENT_TAG: ${{ steps.tag.outputs.tag }}
+
+      - name: Prune old main-track prereleases (keep last 5)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # main-track 用 prerelease (vX.Y.Z-pre.<stamp>) を新しい順に並べ、
+          # 6 件目以降を release ごと削除する。--cleanup-tag で git tag も同時削除。
+          # release/* で切られた v1.0.0-rc.1 のような他 prerelease は対象外。
+          mapfile -t old < <(gh release list \
+            --limit 200 \
+            --json tagName,isPrerelease,createdAt \
+            --jq '[.[]
+                   | select(.isPrerelease)
+                   | select(.tagName | test("^v[0-9]+\\.[0-9]+\\.[0-9]+-pre\\."))]
+                  | sort_by(.createdAt) | reverse | .[5:] | .[].tagName')
+          if [ "${#old[@]}" -eq 0 ]; then
+            echo "No old main-track prereleases to delete."
+            exit 0
+          fi
+          for t in "${old[@]}"; do
+            echo "Deleting release & tag: $t"
+            gh release delete "$t" --yes --cleanup-tag \
+              || echo "::warning::failed to delete $t"
+          done

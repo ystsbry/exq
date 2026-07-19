@@ -1,0 +1,97 @@
+version: 2
+
+project_name: exq
+
+# main-track の rolling release が使う「次に出すバージョン」。
+# release/vX.x ブランチを切ったタイミングで PR でバンプする。
+# release-main.yml が yq でこの値を読み、`v${NEXT_VERSION}-pre.<timestamp>` を
+# prerelease タグとして発行する。
+env:
+  - NEXT_VERSION=0.1.0
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: exq
+    main: ./cmd/exq
+    binary: exq
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - id: exq
+    name_template: "exq_{{.Version}}_{{.Os}}_{{.Arch}}"
+    formats:
+      - tar.gz
+    files:
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: git
+  groups:
+    - title: "Features"
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: "Bug fixes"
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: "Performance"
+      regexp: '^.*?perf(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: "Refactor"
+      regexp: '^.*?refactor(\([[:word:]]+\))??!?:.+$'
+      order: 3
+    - title: "Others"
+      order: 999
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - '^ci:'
+      - '^build:'
+      - '^style:'
+      - '(?i)^merge '
+
+release:
+  github:
+    owner: ystsbry
+    name: exq
+  draft: false
+  prerelease: auto
+  header: |
+    ## exq {{.Tag}}
+
+    ### Install
+
+    ```bash
+    go install github.com/ystsbry/exq/cmd/exq@{{.Tag}}
+    ```
+
+    またはこのリリースのアーカイブ（linux/darwin × amd64/arm64）から
+    バイナリを取得して `$PATH` に配置してください。
+  footer: |
+    **Full changelog**: https://github.com/ystsbry/exq/compare/{{.PreviousTag}}...{{.Tag}}
