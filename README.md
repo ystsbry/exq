@@ -1,0 +1,90 @@
+# exq
+
+リポジトリにコミットせず、ローカル環境専用のコマンドを管理・実行するツール。
+
+コマンドはカレントディレクトリの `.exq/` 配下に置かれ、`.git/info/exclude` によって
+Git 管理から除外されるため、`.gitignore` を汚さずに自分専用のコマンドを持てる。
+
+## インストール
+
+```sh
+make install PREFIX=$HOME/.local
+```
+
+## 使い方
+
+```sh
+exq init          # ./.exq/commands を作成し、.git/info/exclude に .exq/ を追記
+exq               # TUI を開く（enter: 実行 / d: 削除 / q: 終了）
+exq list          # コマンド一覧
+exq run <name>    # コマンドを実行
+exq remove <name> # コマンドを削除（-y で確認スキップ）
+```
+
+## コマンドフォーマット
+
+1 コマンド = `.exq/commands/<name>/` ディレクトリ。
+
+```
+.exq/
+└── commands/
+    └── hello/
+        ├── command.toml   # メタデータ
+        └── run.sh         # 実行エントリポイント（実行権限必須、shebang で任意の言語）
+```
+
+`command.toml`:
+
+```toml
+description = "コマンドの説明"
+```
+
+`run.sh` はユーザーが exq を実行したディレクトリを作業ディレクトリとして実行される。
+
+## Skill（コマンド生成の AI 支援）
+
+やりたいことを伝えると exq フォーマットのコマンドを生成する skill を同梱している。
+Claude Code / OpenAI Codex CLI が **同じ `plugin/` を共有**する:
+
+```
+plugin/
+├── .claude-plugin/plugin.json    # Claude Code 用プラグイン定義
+├── .codex-plugin/plugin.json     # Codex 用プラグイン定義
+└── skills/
+    └── exq-new/SKILL.md          # 共有（1 コピーのみ）
+
+.agents/plugins/marketplace.json  # Codex 用ローカルマーケットプレース（./plugin を参照）
+```
+
+| ランタイム | インストール先 | 呼び出し |
+| --- | --- | --- |
+| Claude Code | `~/.claude/skills/exq`（skills-dir plugin として自動ロード） | `/exq:exq-new <説明>` |
+| OpenAI Codex CLI | プラグイン（marketplace 経由）or `~/.agents/skills/`（fallback） | `$exq-new <説明>` |
+
+```sh
+# Claude Code 用: plugin/ を ~/.claude/skills/exq にシンボリックリンク
+# （claude 再起動後 `claude plugin list` で確認）
+make install-claudecode
+make uninstall-claudecode
+
+# Codex 用: 同じ plugin/ をローカル marketplace 経由でプラグイン登録
+make install-codex             # = codex plugin marketplace add <repo>
+make uninstall-codex
+```
+
+> **Codex の注意点**
+> - marketplace 経由では Codex がプラグインを `~/.codex/plugins/cache/` に**コピー**する
+>   （symlink ではない）ため、SKILL.md を編集したら再インストールが必要。
+> - plugin 未対応の codex バージョン向け fallback として `make install-codex-skills` /
+>   `make uninstall-codex-skills` も用意している（`~/.agents/skills/` へのディレクトリ
+>   symlink。ファイル単位の symlink は loader に落とされる: openai/codex#15756。
+>   symlink なので編集が即反映される）。
+
+## 開発
+
+```sh
+make build   # bin/exq をビルド
+make test    # go test ./...
+make vet     # go vet
+make fmt     # gofmt
+```

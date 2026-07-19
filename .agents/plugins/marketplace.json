@@ -1,0 +1,11 @@
+{
+  "name": "exq",
+  "description": "exq のスキル群を Codex プラグインとして配布するローカルマーケットプレース。",
+  "plugins": [
+    {
+      "name": "exq",
+      "description": "ローカル環境専用コマンドを exq フォーマットで生成する exq-new を提供する exq プラグイン。",
+      "source": { "source": "local", "path": "./plugin" }
+    }
+  ]
+}

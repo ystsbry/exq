@@ -1,0 +1,6 @@
+{
+  "name": "exq",
+  "version": "0.1.0",
+  "description": "Local-only command manager backed by the exq CLI. Provides exq-new to scaffold commands in the exq format.",
+  "author": { "name": "ystsbry" }
+}
