@@ -88,3 +88,16 @@ make test    # go test ./...
 make vet     # go vet
 make fmt     # gofmt
 ```
+
+### UI の確認（storybook 的な起動）
+
+`exq demo` は一時ディレクトリにサンプルコマンドを展開して TUI を開く。
+実環境の `.exq/` には一切触れないので、削除や実行も安全に試せる
+（終了時に一時ディレクトリごと破棄される）。
+
+```sh
+exq demo              # サンプルデータ入りで TUI を起動
+exq demo --empty      # 空状態の表示を確認
+exq demo --snapshot   # 全 UI 状態（browse / empty / confirm-delete / error）を
+                      # stdout にレンダリングして終了（TTY 不要）
+```
