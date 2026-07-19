@@ -99,7 +99,7 @@ func newDemoStore(empty bool) (*store.Store, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	cleanup := func() { os.RemoveAll(tmp) }
+	cleanup := func() { _ = os.RemoveAll(tmp) }
 
 	st, err := store.Open(tmp)
 	if err != nil {

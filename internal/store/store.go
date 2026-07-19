@@ -171,12 +171,15 @@ func ensureLine(path, line string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	defer f.Close()
 	prefix := ""
 	if len(data) > 0 && !bytes.HasSuffix(data, []byte("\n")) {
 		prefix = "\n"
 	}
 	if _, err := fmt.Fprintf(f, "%s%s\n", prefix, line); err != nil {
+		_ = f.Close()
+		return false, err
+	}
+	if err := f.Close(); err != nil {
 		return false, err
 	}
 	return true, nil
