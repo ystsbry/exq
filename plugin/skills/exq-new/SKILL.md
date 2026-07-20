@@ -39,11 +39,24 @@ $exq-new <やりたいことの説明> --name <コマンド名>
 - `<name>`: 小文字ケバブケース推奨。パス区切り (`/`)・`.`・`..` は不可
 - `run.sh`: 実行権限必須 (`chmod +x`)。shebang で任意の言語を使える（bash / python / node など）。
   作業ディレクトリは **ユーザーが exq を実行したディレクトリ**（`.exq/commands/<name>/` ではない）
-- `command.toml`: 最低限 `description` を持つ
+- `command.toml`: 最低限 `description` を持つ。実行時に引数が必要なら `[[args]]` を順に定義する
 
 ```toml
 description = "コマンドの一行説明（TUI と exq list に表示される）"
+
+# 実行時引数が必要な場合のみ。定義順に $1, $2, ... として run.sh へ渡される。
+[[args]]
+key = "env"
+description = "デプロイ先環境 (dev / prod)"
+
+[[args]]
+key = "service"
+description = "対象サービス名（空なら全サービス）"
 ```
+
+`[[args]]` を定義すると、TUI では選択後にキーごとの入力フォームが表示され、
+CLI では `exq run <name> -- <values...>` で定義順に値を渡せる。
+空欄の値も空文字列として位置を保って渡される。
 
 ## 手順
 
@@ -77,7 +90,15 @@ grep -qxF '.exq/' "$excl" 2>/dev/null || { mkdir -p "$(dirname "$excl")"; echo '
 
 - 1 行目は shebang。既定は `#!/usr/bin/env bash` + `set -euo pipefail`。処理内容に適した言語があればそちらの shebang を使う
 - 作業ディレクトリはユーザーの cwd である前提で書く（リポジトリルートが必要なら `git rev-parse --show-toplevel` で解決する）
-- 引数はそのまま `"$@"` で受けられる設計にしておく（exq run 側の引数透過は将来対応でも、スクリプト側は受けられる形にする）
+- 実行時に可変にしたい値（対象環境・サービス名など）があれば `command.toml` に `[[args]]` を定義し、
+  run.sh 冒頭で定義順にキー名の変数へ受ける。値は TUI フォーム / `exq run <name> -- <values...>` の
+  両方から定義順の位置引数で渡ってくる。空欄は空文字列で届くのでデフォルト値は `${1:-default}` 形式で書く
+
+  ```bash
+  # $1: env, $2: service（command.toml の [[args]] 定義順）
+  env="${1:?env is required}"
+  service="${2:-}"
+  ```
 - 破壊的な処理（削除・リセット・強制 push 等）を含む場合は、スクリプト内に確認プロンプトか `--yes` フラグを入れる
 - シークレットや環境固有の絶対パスをハードコードしない。必要なら環境変数を参照し、未設定時は分かるエラーを出す
 
@@ -92,6 +113,9 @@ chmod +x .exq/commands/<name>/run.sh
 ```toml
 description = "<TUI 一覧で一目で分かる一行説明>"
 ```
+
+引数を使うスクリプトにした場合は、run.sh の `$1, $2, ...` と同じ順で `[[args]]` を定義する
+（key はスクリプト内の変数名と揃え、description には TUI フォームで迷わない説明を書く）。
 
 ### 6. 検証
 

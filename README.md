@@ -14,11 +14,11 @@ make install PREFIX=$HOME/.local
 ## 使い方
 
 ```sh
-exq init          # ./.exq/commands を作成し、.git/info/exclude に .exq/ を追記
-exq               # TUI を開く（enter: 実行 / d: 削除 / q: 終了）
-exq list          # コマンド一覧
-exq run <name>    # コマンドを実行
-exq remove <name> # コマンドを削除（-y で確認スキップ）
+exq init                       # ./.exq/commands を作成し、.git/info/exclude に .exq/ を追記
+exq                            # TUI を開く（enter: 実行 / d: 削除 / q: 終了）
+exq list                       # コマンド一覧
+exq run <name> [-- <values...>] # コマンドを実行（-- 以降は引数として $1, $2, ... に渡る）
+exq remove <name>              # コマンドを削除（-y で確認スキップ）
 ```
 
 ## コマンドフォーマット
@@ -37,9 +37,30 @@ exq remove <name> # コマンドを削除（-y で確認スキップ）
 
 ```toml
 description = "コマンドの説明"
+
+# 実行時引数が必要な場合のみ。定義順に $1, $2, ... として run.sh へ渡される。
+[[args]]
+key = "env"
+description = "デプロイ先環境 (dev / prod)"
+
+[[args]]
+key = "service"
+description = "対象サービス名（空なら全サービス）"
 ```
 
 `run.sh` はユーザーが exq を実行したディレクトリを作業ディレクトリとして実行される。
+
+### 実行時引数
+
+`[[args]]` を定義したコマンドは:
+
+- **TUI**: enter で選択すると、キーと説明が一覧で並ぶ入力フォームが開く
+  （tab/↑↓ で移動、enter で実行、esc で一覧に戻る）
+- **CLI**: `exq run <name> -- <values...>` で定義順に値を渡す
+
+どちらもシェルを介さず定義順の位置引数（`$1`, `$2`, ...）として渡り、
+空欄の値も空文字列として位置を保つ。`[[args]]` の無いコマンドは従来どおり
+enter で即実行される。
 
 ## Skill（コマンド生成の AI 支援）
 

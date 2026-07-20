@@ -23,10 +23,19 @@ const (
 	RunFile = "run.sh"
 )
 
+// Arg is one declared argument of a command. The [[args]] order in
+// command.toml is the positional order the values are passed in ($1, $2, …),
+// so Args must preserve file order.
+type Arg struct {
+	Key         string `toml:"key"`
+	Description string `toml:"description"`
+}
+
 // Command is a single exq command discovered on disk.
 type Command struct {
 	Name        string
 	Description string
+	Args        []Arg
 	Dir         string // absolute path to .exq/commands/<name>
 }
 
@@ -38,6 +47,7 @@ func (c Command) RunPath() string {
 // meta mirrors command.toml.
 type meta struct {
 	Description string `toml:"description"`
+	Args        []Arg  `toml:"args"`
 }
 
 // Load reads the command stored at dir. A missing or malformed command.toml
@@ -51,6 +61,7 @@ func Load(dir string) Command {
 	var m meta
 	if _, err := toml.DecodeFile(filepath.Join(dir, MetaFile), &m); err == nil {
 		c.Description = m.Description
+		c.Args = m.Args
 	}
 	return c
 }

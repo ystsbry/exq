@@ -57,14 +57,14 @@ func runTUI() error {
 	if err != nil {
 		return err
 	}
-	pick, err := tui.Run(st)
+	res, err := tui.Run(st)
 	if err != nil {
 		return err
 	}
-	if pick == nil {
+	if res == nil {
 		return nil
 	}
-	code, err := runner.Run(*pick, st.Root)
+	code, err := runner.Run(res.Command, st.Root, res.Values)
 	if err != nil {
 		return err
 	}

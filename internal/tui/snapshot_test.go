@@ -27,10 +27,13 @@ func TestSnapshotsRenderAllStates(t *testing.T) {
 		byName[s.Name] = s.View
 	}
 
-	for _, want := range []string{"browse", "browse-empty", "confirm-delete", "error"} {
+	for _, want := range []string{"browse", "browse-empty", "confirm-delete", "args-form", "error"} {
 		if _, ok := byName[want]; !ok {
 			t.Errorf("missing snapshot %q", want)
 		}
+	}
+	if !strings.Contains(byName["args-form"], "env") {
+		t.Errorf("args-form snapshot should show argument keys:\n%s", byName["args-form"])
 	}
 	if !strings.Contains(byName["browse"], "alpha") {
 		t.Errorf("browse snapshot should list commands:\n%s", byName["browse"])

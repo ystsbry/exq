@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -33,7 +34,15 @@ func newListCmd() *cobra.Command {
 				}
 			}
 			for _, c := range cmds {
-				fmt.Fprintf(out, "%-*s  %s\n", width, c.Name, c.Description)
+				meta := c.Description
+				if len(c.Args) > 0 {
+					keys := make([]string, len(c.Args))
+					for i, a := range c.Args {
+						keys[i] = a.Key
+					}
+					meta = strings.TrimSpace(meta + " (args: " + strings.Join(keys, ", ") + ")")
+				}
+				fmt.Fprintf(out, "%-*s  %s\n", width, c.Name, meta)
 			}
 			return nil
 		},

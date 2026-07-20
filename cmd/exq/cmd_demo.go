@@ -14,24 +14,36 @@ import (
 )
 
 // sampleCommands is the fixture set the demo store is populated with.
-// One entry has a long description to check wrapping/truncation visually.
+// One entry has a long description to check wrapping/truncation visually,
+// and one declares [[args]] so the argument form can be exercised.
 var sampleCommands = []struct {
-	name, description, script string
+	name, meta, script string
 }{
 	{
-		name:        "deploy-local",
-		description: "ローカル環境にビルドしてデプロイする",
-		script:      "#!/bin/sh\necho \"[demo] deploy-local: pretending to deploy...\"\n",
+		name: "deploy-local",
+		meta: `description = "ローカル環境にビルドしてデプロイする"
+
+[[args]]
+key = "env"
+description = "デプロイ先環境 (dev / prod)"
+
+[[args]]
+key = "service"
+description = "対象サービス名（空なら全サービス）"
+`,
+		script: "#!/bin/sh\necho \"[demo] deploy-local: env=${1:-} service=${2:-} (pretending to deploy...)\"\n",
 	},
 	{
-		name:        "reset-db",
-		description: "テスト DB を初期化してシードデータを投入する（この説明は折り返し・省略の見え方を確認するために意図的に長くしてある）",
-		script:      "#!/bin/sh\necho \"[demo] reset-db: pretending to reset the database...\"\n",
+		name: "reset-db",
+		meta: `description = "テスト DB を初期化してシードデータを投入する（この説明は折り返し・省略の見え方を確認するために意図的に長くしてある）"
+`,
+		script: "#!/bin/sh\necho \"[demo] reset-db: pretending to reset the database...\"\n",
 	},
 	{
-		name:        "tail-logs",
-		description: "開発サーバのログを追いかける",
-		script:      "#!/bin/sh\necho \"[demo] tail-logs: pretending to tail logs...\"\n",
+		name: "tail-logs",
+		meta: `description = "開発サーバのログを追いかける"
+`,
+		script: "#!/bin/sh\necho \"[demo] tail-logs: pretending to tail logs...\"\n",
 	},
 }
 
@@ -69,14 +81,14 @@ is rendered to stdout instead — no TTY or key input needed.`,
 				return nil
 			}
 
-			pick, err := tui.Run(st)
+			res, err := tui.Run(st)
 			if err != nil {
 				return err
 			}
-			if pick == nil {
+			if res == nil {
 				return nil
 			}
-			code, err := runner.Run(*pick, st.Root)
+			code, err := runner.Run(res.Command, st.Root, res.Values)
 			if err != nil {
 				return err
 			}
@@ -117,8 +129,7 @@ func newDemoStore(empty bool) (*store.Store, func(), error) {
 				cleanup()
 				return nil, nil, err
 			}
-			meta := fmt.Sprintf("description = %q\n", s.description)
-			if err := os.WriteFile(filepath.Join(dir, command.MetaFile), []byte(meta), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, command.MetaFile), []byte(s.meta), 0o644); err != nil {
 				cleanup()
 				return nil, nil, err
 			}
