@@ -1,6 +1,6 @@
 ---
 name: exq-new
-description: ローカル環境専用コマンドを exq フォーマット (.exq/commands/<name>/ に command.toml + run.sh) で作成する。「exq コマンドを作って」「ローカル専用コマンドを追加して」「exq-new」などと言われたら使う。引数は作りたいコマンドの説明（任意で --name <コマンド名>）。
+description: ローカル環境専用コマンドを exq フォーマット (.exq/scripts/<name>/ に command.toml + run.sh) で作成する。「exq コマンドを作って」「ローカル専用コマンドを追加して」「exq-new」などと言われたら使う。引数は作りたいコマンドの説明（任意で --name <コマンド名>）。
 ---
 
 # exq-new
@@ -24,11 +24,11 @@ $exq-new <やりたいことの説明> --name <コマンド名>
 
 ## exq フォーマット
 
-1 コマンド = カレントディレクトリの `.exq/commands/<name>/` ディレクトリ:
+1 コマンド = カレントディレクトリの `.exq/scripts/<name>/` ディレクトリ:
 
 ```
 .exq/
-└── commands/
+└── scripts/
     └── <name>/
         ├── command.toml   # メタデータ
         └── run.sh         # 実行エントリポイント
@@ -38,7 +38,7 @@ $exq-new <やりたいことの説明> --name <コマンド名>
 
 - `<name>`: 小文字ケバブケース推奨。パス区切り (`/`)・`.`・`..` は不可
 - `run.sh`: 実行権限必須 (`chmod +x`)。shebang で任意の言語を使える（bash / python / node など）。
-  作業ディレクトリは **ユーザーが exq を実行したディレクトリ**（`.exq/commands/<name>/` ではない）
+  作業ディレクトリは **ユーザーが exq を実行したディレクトリ**（`.exq/scripts/<name>/` ではない）
 - `command.toml`: 最低限 `description` を持つ。実行時に引数が必要なら `[[args]]` を順に定義する
 
 ```toml
@@ -75,18 +75,18 @@ exq init
 `exq` が `$PATH` に無い場合は手動で同等の処理を行う:
 
 ```bash
-mkdir -p .exq/commands
+mkdir -p .exq/scripts .exq/workflows
 excl="$(git rev-parse --git-common-dir)/info/exclude"
 grep -qxF '.exq/' "$excl" 2>/dev/null || { mkdir -p "$(dirname "$excl")"; echo '.exq/' >> "$excl"; }
 ```
 
 ### 3. 既存コマンドとの衝突チェック
 
-`.exq/commands/<name>/` が既に存在する場合は**上書きせず**、ユーザーに確認を取る（別名を提案するか、上書きの明示的な了承を得る）。
+`.exq/scripts/<name>/` が既に存在する場合は**上書きせず**、ユーザーに確認を取る（別名を提案するか、上書きの明示的な了承を得る）。
 
 ### 4. run.sh の生成
 
-説明された処理を実装したスクリプトを `.exq/commands/<name>/run.sh` に書く。
+説明された処理を実装したスクリプトを `.exq/scripts/<name>/run.sh` に書く。
 
 - 1 行目は shebang。既定は `#!/usr/bin/env bash` + `set -euo pipefail`。処理内容に適した言語があればそちらの shebang を使う
 - 作業ディレクトリはユーザーの cwd である前提で書く（リポジトリルートが必要なら `git rev-parse --show-toplevel` で解決する）
@@ -105,7 +105,7 @@ grep -qxF '.exq/' "$excl" 2>/dev/null || { mkdir -p "$(dirname "$excl")"; echo '
 書き終えたら必ず実行権限を付ける:
 
 ```bash
-chmod +x .exq/commands/<name>/run.sh
+chmod +x .exq/scripts/<name>/run.sh
 ```
 
 ### 5. command.toml の生成
@@ -120,7 +120,7 @@ description = "<TUI 一覧で一目で分かる一行説明>"
 ### 6. 検証
 
 ```bash
-bash -n .exq/commands/<name>/run.sh   # bash の場合の構文チェック
+bash -n .exq/scripts/<name>/run.sh   # bash の場合の構文チェック
 exq list                              # 一覧に載ることを確認
 ```
 
@@ -129,7 +129,7 @@ exq list                              # 一覧に載ることを確認
 `exq` が `$PATH` に無い場合は `exq list` の代わりにディレクトリ構成と実行権限を確認する:
 
 ```bash
-ls -l .exq/commands/<name>/
+ls -l .exq/scripts/<name>/
 ```
 
 ### 7. 報告
@@ -137,7 +137,7 @@ ls -l .exq/commands/<name>/
 ユーザーに以下を報告する:
 
 ```
-Created .exq/commands/<name>/
+Created .exq/scripts/<name>/
 - command.toml: <description>
 - run.sh: <何をするスクリプトか一行>
 

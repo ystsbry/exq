@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ystsbry/exq/internal/command"
 	"github.com/ystsbry/exq/internal/runner"
 	"github.com/ystsbry/exq/internal/store"
 	"github.com/ystsbry/exq/internal/tui"
@@ -64,12 +65,24 @@ func runTUI() error {
 	if res == nil {
 		return nil
 	}
+	if err := ensureExecutable(res.Command); err != nil {
+		return err
+	}
 	code, err := runner.Run(res.Command, st.Root, res.Values)
 	if err != nil {
 		return err
 	}
 	if code != 0 {
 		os.Exit(code)
+	}
+	return nil
+}
+
+// ensureExecutable rejects kinds the runner cannot execute yet, with a
+// message that beats the raw "run.sh: no such file" it would otherwise hit.
+func ensureExecutable(c command.Command) error {
+	if c.Kind == command.KindWorkflow {
+		return fmt.Errorf("%q is a workflow — workflow execution is not implemented yet", c.Name)
 	}
 	return nil
 }

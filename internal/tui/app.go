@@ -225,7 +225,7 @@ func (m model) viewList() string {
 	b.WriteString("\n\n")
 
 	if len(m.items) == 0 {
-		b.WriteString(dimStyle.Render("  no commands yet — add one under " + m.store.CommandsDir()))
+		b.WriteString(dimStyle.Render("  no commands yet — add one under " + m.store.ScriptsDir()))
 		b.WriteString("\n")
 	}
 	for i, it := range m.items {

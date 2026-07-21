@@ -38,8 +38,10 @@ func TestInitCreatesDirAndExclude(t *testing.T) {
 	if !res.UpdatedExclude {
 		t.Error("expected UpdatedExclude=true on first init")
 	}
-	if info, err := os.Stat(st.CommandsDir()); err != nil || !info.IsDir() {
-		t.Errorf("commands dir not created: %v", err)
+	for _, dir := range []string{st.ScriptsDir(), st.WorkflowsDir()} {
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			t.Errorf("%s not created: %v", dir, err)
+		}
 	}
 
 	data, err := os.ReadFile(filepath.Join(repo, ".git", "info", "exclude"))
@@ -78,10 +80,10 @@ func TestInitOutsideGitRepoFails(t *testing.T) {
 	}
 }
 
-// addCommand writes a minimal command directory for tests.
-func addCommand(t *testing.T, st *Store, name, description string) {
+// addEntry writes a minimal command directory under base for tests.
+func addEntry(t *testing.T, base, name, description string) {
 	t.Helper()
-	dir := filepath.Join(st.CommandsDir(), name)
+	dir := filepath.Join(base, name)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -93,6 +95,12 @@ func addCommand(t *testing.T, st *Store, name, description string) {
 	if err := os.WriteFile(filepath.Join(dir, command.RunFile), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// addCommand writes a minimal script for tests.
+func addCommand(t *testing.T, st *Store, name, description string) {
+	t.Helper()
+	addEntry(t, st.ScriptsDir(), name, description)
 }
 
 func TestListAndGet(t *testing.T) {
@@ -141,7 +149,7 @@ func TestBrokenMetaStillListed(t *testing.T) {
 	if _, err := st.Init(); err != nil {
 		t.Fatal(err)
 	}
-	dir := filepath.Join(st.CommandsDir(), "broken")
+	dir := filepath.Join(st.ScriptsDir(), "broken")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -187,5 +195,109 @@ func TestRemoveRejectsPathTraversal(t *testing.T) {
 		if err := st.Remove(name); err == nil {
 			t.Errorf("Remove(%q) should fail", name)
 		}
+	}
+}
+
+func TestInitMigratesLegacyCommands(t *testing.T) {
+	repo := newRepo(t)
+	st, _ := Open(repo)
+	addEntry(t, filepath.Join(st.Dir(), "commands"), "old-cmd", "from legacy layout")
+
+	res, err := st.Init()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Migrated) != 1 || res.Migrated[0] != "old-cmd" {
+		t.Fatalf("Migrated = %v, want [old-cmd]", res.Migrated)
+	}
+	if _, err := os.Stat(filepath.Join(st.Dir(), "commands")); !os.IsNotExist(err) {
+		t.Error("legacy commands/ should be removed after migration")
+	}
+
+	c, err := st.Get("old-cmd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Kind != command.KindScript || c.Description != "from legacy layout" {
+		t.Errorf("migrated command wrong: %+v", c)
+	}
+
+	// Re-running init after migration is a no-op.
+	res, err = st.Init()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Migrated) != 0 {
+		t.Errorf("second init should migrate nothing, got %v", res.Migrated)
+	}
+}
+
+func TestLegacyLayoutErrorsOnListAndGet(t *testing.T) {
+	repo := newRepo(t)
+	st, _ := Open(repo)
+	addEntry(t, filepath.Join(st.Dir(), "commands"), "old-cmd", "legacy")
+
+	if _, err := st.List(); err == nil || !strings.Contains(err.Error(), "exq init") {
+		t.Errorf("List should hint at migration, got %v", err)
+	}
+	if _, err := st.Get("old-cmd"); err == nil || !strings.Contains(err.Error(), "exq init") {
+		t.Errorf("Get should hint at migration, got %v", err)
+	}
+}
+
+func TestListDiscoversWorkflowsAndKinds(t *testing.T) {
+	repo := newRepo(t)
+	st, _ := Open(repo)
+	if _, err := st.Init(); err != nil {
+		t.Fatal(err)
+	}
+	addEntry(t, st.ScriptsDir(), "build", "a script")
+	wfDir := filepath.Join(st.WorkflowsDir(), "pre-pr")
+	if err := os.MkdirAll(wfDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	meta := "description = \"a workflow\"\n"
+	if err := os.WriteFile(filepath.Join(wfDir, command.MetaFile), []byte(meta), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmds, err := st.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cmds) != 2 {
+		t.Fatalf("expected 2 entries, got %+v", cmds)
+	}
+	kinds := map[string]command.Kind{}
+	for _, c := range cmds {
+		kinds[c.Name] = c.Kind
+	}
+	if kinds["build"] != command.KindScript || kinds["pre-pr"] != command.KindWorkflow {
+		t.Errorf("kinds wrong: %v", kinds)
+	}
+
+	wf, err := st.Get("pre-pr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wf.Kind != command.KindWorkflow {
+		t.Errorf("Get kind = %v, want KindWorkflow", wf.Kind)
+	}
+}
+
+func TestDuplicateNameAcrossKindsFails(t *testing.T) {
+	repo := newRepo(t)
+	st, _ := Open(repo)
+	if _, err := st.Init(); err != nil {
+		t.Fatal(err)
+	}
+	addEntry(t, st.ScriptsDir(), "deploy", "script side")
+	addEntry(t, st.WorkflowsDir(), "deploy", "workflow side")
+
+	if _, err := st.List(); err == nil || !strings.Contains(err.Error(), "unique") {
+		t.Errorf("List should fail on duplicate name, got %v", err)
+	}
+	if _, err := st.Get("deploy"); err == nil || !strings.Contains(err.Error(), "unique") {
+		t.Errorf("Get should fail on duplicate name, got %v", err)
 	}
 }

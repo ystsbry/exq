@@ -18,8 +18,12 @@ import (
 const (
 	// DirName is the exq data directory created in the working directory.
 	DirName = ".exq"
-	// commandsSubdir holds one directory per command under DirName.
-	commandsSubdir = "commands"
+	// scriptsSubdir holds one directory per script under DirName.
+	scriptsSubdir = "scripts"
+	// workflowsSubdir holds one directory per workflow under DirName.
+	workflowsSubdir = "workflows"
+	// legacySubdir is the pre-scripts/workflows layout; Init migrates it.
+	legacySubdir = "commands"
 	// excludePattern is the line appended to .git/info/exclude. The
 	// trailing slash restricts the match to directories.
 	excludePattern = ".exq/"
@@ -46,9 +50,43 @@ func (s *Store) Dir() string {
 	return filepath.Join(s.Root, DirName)
 }
 
-// CommandsDir returns the absolute path of the commands directory.
-func (s *Store) CommandsDir() string {
-	return filepath.Join(s.Dir(), commandsSubdir)
+// ScriptsDir returns the absolute path of the scripts directory.
+func (s *Store) ScriptsDir() string {
+	return filepath.Join(s.Dir(), scriptsSubdir)
+}
+
+// WorkflowsDir returns the absolute path of the workflows directory.
+func (s *Store) WorkflowsDir() string {
+	return filepath.Join(s.Dir(), workflowsSubdir)
+}
+
+// legacyDir is the pre-migration commands directory.
+func (s *Store) legacyDir() string {
+	return filepath.Join(s.Dir(), legacySubdir)
+}
+
+// kindDir pairs a discovery directory with the Kind of its entries.
+type kindDir struct {
+	dir  string
+	kind command.Kind
+}
+
+// kindDirs returns the discovery locations in deterministic order.
+func (s *Store) kindDirs() []kindDir {
+	return []kindDir{
+		{s.ScriptsDir(), command.KindScript},
+		{s.WorkflowsDir(), command.KindWorkflow},
+	}
+}
+
+// checkLegacy fails when the old .exq/commands layout is still present, so
+// list/run surface a migration hint instead of silently showing nothing.
+func (s *Store) checkLegacy() error {
+	if info, err := os.Stat(s.legacyDir()); err == nil && info.IsDir() {
+		return fmt.Errorf("legacy layout %s detected — run `exq init` to migrate to %s",
+			s.legacyDir(), s.ScriptsDir())
+	}
+	return nil
 }
 
 // Exists reports whether the .exq directory has been initialized.
@@ -62,20 +100,30 @@ type InitResult struct {
 	CreatedDir     bool
 	UpdatedExclude bool
 	ExcludePath    string
+	Migrated       []string // entry names moved from the legacy commands/ dir
 }
 
-// Init creates .exq/commands/ and ensures .git/info/exclude contains the
-// exclude pattern. It is idempotent: re-running never duplicates the
-// exclude line or fails on existing directories.
+// Init creates .exq/scripts/ and .exq/workflows/, migrates a legacy
+// .exq/commands/ layout into scripts/, and ensures .git/info/exclude
+// contains the exclude pattern. It is idempotent: re-running never
+// duplicates the exclude line or fails on existing directories.
 func (s *Store) Init() (*InitResult, error) {
 	res := &InitResult{}
 
 	if !s.Exists() {
 		res.CreatedDir = true
 	}
-	if err := os.MkdirAll(s.CommandsDir(), 0o755); err != nil {
-		return nil, fmt.Errorf("create %s: %w", s.CommandsDir(), err)
+	for _, dir := range []string{s.ScriptsDir(), s.WorkflowsDir()} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, fmt.Errorf("create %s: %w", dir, err)
+		}
 	}
+
+	migrated, err := s.migrateLegacy()
+	if err != nil {
+		return nil, err
+	}
+	res.Migrated = migrated
 
 	excludePath, err := gitExcludePath(s.Root)
 	if err != nil {
@@ -90,38 +138,99 @@ func (s *Store) Init() (*InitResult, error) {
 	return res, nil
 }
 
-// List returns the commands under .exq/commands/, sorted by name.
-// A missing commands directory yields an empty list, not an error.
-func (s *Store) List() ([]command.Command, error) {
-	entries, err := os.ReadDir(s.CommandsDir())
+// migrateLegacy moves every entry of a pre-scripts/workflows commands/
+// directory into scripts/ and removes the emptied commands/ directory.
+// Returns the migrated entry names; a missing legacy dir is a no-op.
+func (s *Store) migrateLegacy() ([]string, error) {
+	entries, err := os.ReadDir(s.legacyDir())
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
 		return nil, err
 	}
-	var cmds []command.Command
+	var migrated []string
 	for _, e := range entries {
-		if !e.IsDir() {
-			continue
+		src := filepath.Join(s.legacyDir(), e.Name())
+		dst := filepath.Join(s.ScriptsDir(), e.Name())
+		if _, err := os.Stat(dst); err == nil {
+			return nil, fmt.Errorf("cannot migrate %s: %s already exists", src, dst)
 		}
-		cmds = append(cmds, command.Load(filepath.Join(s.CommandsDir(), e.Name())))
+		if err := os.Rename(src, dst); err != nil {
+			return nil, fmt.Errorf("migrate %s: %w", src, err)
+		}
+		migrated = append(migrated, e.Name())
+	}
+	if err := os.Remove(s.legacyDir()); err != nil {
+		return nil, fmt.Errorf("remove legacy dir %s: %w", s.legacyDir(), err)
+	}
+	return migrated, nil
+}
+
+// List returns the scripts and workflows under .exq/, sorted by name.
+// Missing subdirectories yield an empty list, not an error. Names must be
+// unique across both kinds; a duplicate is an error.
+func (s *Store) List() ([]command.Command, error) {
+	if err := s.checkLegacy(); err != nil {
+		return nil, err
+	}
+	var cmds []command.Command
+	seen := map[string]string{}
+	for _, loc := range s.kindDirs() {
+		dir, kind := loc.dir, loc.kind
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, err
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			if prev, dup := seen[e.Name()]; dup {
+				return nil, fmt.Errorf("name %q exists in both %s and %s — names must be unique across scripts and workflows",
+					e.Name(), prev, dir)
+			}
+			seen[e.Name()] = dir
+			c := command.Load(filepath.Join(dir, e.Name()))
+			c.Kind = kind
+			cmds = append(cmds, c)
+		}
 	}
 	sort.Slice(cmds, func(i, j int) bool { return cmds[i].Name < cmds[j].Name })
 	return cmds, nil
 }
 
-// Get returns the command with the given name.
+// Get returns the script or workflow with the given name. A name present
+// in both subdirectories is an error.
 func (s *Store) Get(name string) (command.Command, error) {
 	if err := command.ValidateName(name); err != nil {
 		return command.Command{}, err
 	}
-	dir := filepath.Join(s.CommandsDir(), name)
-	info, err := os.Stat(dir)
-	if err != nil || !info.IsDir() {
-		return command.Command{}, fmt.Errorf("command %q not found under %s", name, s.CommandsDir())
+	if err := s.checkLegacy(); err != nil {
+		return command.Command{}, err
 	}
-	return command.Load(dir), nil
+	var found []command.Command
+	for _, loc := range s.kindDirs() {
+		path := filepath.Join(loc.dir, name)
+		if info, err := os.Stat(path); err == nil && info.IsDir() {
+			c := command.Load(path)
+			c.Kind = loc.kind
+			found = append(found, c)
+		}
+	}
+	switch len(found) {
+	case 0:
+		return command.Command{}, fmt.Errorf("command %q not found under %s or %s",
+			name, s.ScriptsDir(), s.WorkflowsDir())
+	case 1:
+		return found[0], nil
+	default:
+		return command.Command{}, fmt.Errorf("name %q exists in both %s and %s — names must be unique across scripts and workflows",
+			name, s.ScriptsDir(), s.WorkflowsDir())
+	}
 }
 
 // Remove deletes the command directory for name.

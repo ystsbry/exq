@@ -24,7 +24,7 @@ func newListCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			if len(cmds) == 0 {
-				fmt.Fprintf(out, "No commands under %s.\n", st.CommandsDir())
+				fmt.Fprintf(out, "No commands under %s.\n", st.Dir())
 				return nil
 			}
 			width := 0

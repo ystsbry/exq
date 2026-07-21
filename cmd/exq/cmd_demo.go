@@ -118,13 +118,13 @@ func newDemoStore(empty bool) (*store.Store, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	if err := os.MkdirAll(st.CommandsDir(), 0o755); err != nil {
+	if err := os.MkdirAll(st.ScriptsDir(), 0o755); err != nil {
 		cleanup()
 		return nil, nil, err
 	}
 	if !empty {
 		for _, s := range sampleCommands {
-			dir := filepath.Join(st.CommandsDir(), s.name)
+			dir := filepath.Join(st.ScriptsDir(), s.name)
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				cleanup()
 				return nil, nil, err

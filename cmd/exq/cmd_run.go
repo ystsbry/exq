@@ -30,6 +30,9 @@ declared in command.toml.`,
 			if err != nil {
 				return err
 			}
+			if err := ensureExecutable(c); err != nil {
+				return err
+			}
 			code, err := runner.Run(c, st.Root, values)
 			if err != nil {
 				return err

@@ -31,12 +31,25 @@ type Arg struct {
 	Description string `toml:"description"`
 }
 
+// Kind tells which .exq subdirectory a command was discovered in.
+type Kind int
+
+const (
+	// KindScript is a single-purpose script under .exq/scripts/.
+	KindScript Kind = iota
+	// KindWorkflow is a steps composition under .exq/workflows/.
+	// Execution is not implemented yet (EXQ-15); the kind exists so the
+	// store can already discover and address workflow entries.
+	KindWorkflow
+)
+
 // Command is a single exq command discovered on disk.
 type Command struct {
 	Name        string
 	Description string
 	Args        []Arg
-	Dir         string // absolute path to .exq/commands/<name>
+	Kind        Kind
+	Dir         string // absolute path to .exq/scripts/<name> or .exq/workflows/<name>
 }
 
 // RunPath returns the absolute path of the command's entrypoint.

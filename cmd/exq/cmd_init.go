@@ -13,9 +13,10 @@ func newInitCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "init",
 		Short: "Create ./.exq and exclude it via .git/info/exclude",
-		Long: `Create the .exq/commands directory in the current working directory and
-append ".exq/" to the repository's .git/info/exclude so the directory never
-appears in git status. Safe to re-run: nothing is duplicated.`,
+		Long: `Create the .exq/scripts and .exq/workflows directories in the current
+working directory and append ".exq/" to the repository's .git/info/exclude
+so the directory never appears in git status. A legacy .exq/commands layout
+is migrated into scripts/. Safe to re-run: nothing is duplicated.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			wd, err := os.Getwd()
@@ -32,9 +33,12 @@ appears in git status. Safe to re-run: nothing is duplicated.`,
 			}
 			out := cmd.OutOrStdout()
 			if res.CreatedDir {
-				fmt.Fprintf(out, "Created %s\n", st.CommandsDir())
+				fmt.Fprintf(out, "Created %s and %s\n", st.ScriptsDir(), st.WorkflowsDir())
 			} else {
 				fmt.Fprintf(out, "%s already exists\n", st.Dir())
+			}
+			for _, name := range res.Migrated {
+				fmt.Fprintf(out, "Migrated %s: commands/ -> scripts/\n", name)
 			}
 			if res.UpdatedExclude {
 				fmt.Fprintf(out, "Added \".exq/\" to %s\n", res.ExcludePath)
