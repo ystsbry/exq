@@ -1,0 +1,5 @@
+description = "ビルド済み bin/exq を配置する（ビルドはしない）"
+
+[[args]]
+key = "prefix"
+description = "インストール先 PREFIX（空なら ~/.local）"

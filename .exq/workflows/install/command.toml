@@ -1,0 +1,8 @@
+description = "exq バイナリをビルドしてインストールする"
+# NOTE: steps は [[args]] より前に書くこと（TOML のテーブルの後の
+# トップレベルキーはテーブル側に解釈される）。
+steps = ["build", "install-bin ${prefix}"]
+
+[[args]]
+key = "prefix"
+description = "インストール先 PREFIX（空なら ~/.local）"

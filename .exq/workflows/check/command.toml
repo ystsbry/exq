@@ -1,0 +1,2 @@
+description = "fmt チェック + vet + test をまとめて実行する"
+steps = ["fmt-check", "vet", "test"]
