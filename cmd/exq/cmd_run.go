@@ -2,12 +2,10 @@ package main
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 
 	"github.com/ystsbry/exq/internal/command"
-	"github.com/ystsbry/exq/internal/runner"
 )
 
 func newRunCmd() *cobra.Command {
@@ -34,14 +32,7 @@ declared in command.toml.`,
 			if c.Kind == command.KindWorkflow {
 				return executeWorkflow(st, c, values)
 			}
-			code, err := runner.Run(c, st.Root, values)
-			if err != nil {
-				return err
-			}
-			if code != 0 {
-				os.Exit(code)
-			}
-			return nil
+			return executeScript(st, c, values)
 		},
 	}
 	return cmd

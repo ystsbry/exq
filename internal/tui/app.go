@@ -57,8 +57,10 @@ func Run(st *store.Store) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Alt screen keeps the user's terminal intact: on quit the original
+	// screen is restored, so no TUI frame residue precedes command output.
 	m := newModel(st, items)
-	final, err := tea.NewProgram(m).Run()
+	final, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
 	if err != nil {
 		return nil, err
 	}

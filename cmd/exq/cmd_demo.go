@@ -9,7 +9,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ystsbry/exq/internal/command"
-	"github.com/ystsbry/exq/internal/runner"
 	"github.com/ystsbry/exq/internal/store"
 	"github.com/ystsbry/exq/internal/tui"
 	"github.com/ystsbry/exq/internal/workflow"
@@ -136,14 +135,7 @@ is rendered to stdout instead — no TTY or key input needed.`,
 			if res.Command.Kind == command.KindWorkflow {
 				return executeWorkflow(st, res.Command, res.Values)
 			}
-			code, err := runner.Run(res.Command, st.Root, res.Values)
-			if err != nil {
-				return err
-			}
-			if code != 0 {
-				os.Exit(code)
-			}
-			return nil
+			return executeScript(st, res.Command, res.Values)
 		},
 	}
 	cmd.Flags().BoolVar(&empty, "empty", false, "start with no commands (empty state)")

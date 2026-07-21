@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -69,13 +71,31 @@ func runTUI() error {
 	if res.Command.Kind == command.KindWorkflow {
 		return executeWorkflow(st, res.Command, res.Values)
 	}
-	code, err := runner.Run(res.Command, st.Root, res.Values)
+	return executeScript(st, res.Command, res.Values)
+}
+
+// executeScript runs a script with a stderr frame around its raw output
+// (▶ name … ✓/✗ name), so what ran and how it ended is always visible —
+// including after the TUI has restored the terminal. The frame goes to
+// stderr so piping the script's stdout stays clean. A non-zero script
+// exits exq with that code.
+func executeScript(st *store.Store, c command.Command, values []string) error {
+	label := c.Name
+	if len(values) > 0 {
+		label += " " + strings.Join(values, " ")
+	}
+	fmt.Fprintf(os.Stderr, "▶ %s\n", label)
+	start := time.Now()
+	code, err := runner.Run(c, st.Root, values)
 	if err != nil {
 		return err
 	}
+	dur := time.Since(start).Seconds()
 	if code != 0 {
+		fmt.Fprintf(os.Stderr, "✗ %s (%.1fs, exit %d)\n", c.Name, dur, code)
 		os.Exit(code)
 	}
+	fmt.Fprintf(os.Stderr, "✓ %s (%.1fs)\n", c.Name, dur)
 	return nil
 }
 
