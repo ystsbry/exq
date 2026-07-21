@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/ystsbry/exq/internal/command"
 	"github.com/ystsbry/exq/internal/store"
@@ -203,6 +204,39 @@ func TestEmptyTabShowsHint(t *testing.T) {
 	out = step(t, out, key("enter"))
 	if out.chosen != -1 {
 		t.Errorf("chosen = %d, want -1 on empty tab", out.chosen)
+	}
+}
+
+func TestListScrollsToKeepCursorVisible(t *testing.T) {
+	var items []command.Command
+	for _, n := range []string{"a1", "b2", "c3", "d4", "e5", "f6"} {
+		items = append(items, command.Command{Name: n, Description: "desc " + n})
+	}
+	m := testModel(t, items)
+	out := step(t, m, tea.WindowSizeMsg{Width: 80, Height: 14})
+
+	// Jump to the last entry: the view must stay within the terminal
+	// height, keep the cursor visible, and show the ↑ indicator.
+	out = step(t, out, key("G"))
+	view := out.View()
+	if h := lipgloss.Height(view); h > 14 {
+		t.Errorf("view height = %d, want <= 14:\n%s", h, view)
+	}
+	if !strings.Contains(view, "▸ f6") {
+		t.Errorf("cursor card should be visible:\n%s", view)
+	}
+	if !strings.Contains(view, "↑ 4 more") {
+		t.Errorf("expected ↑ more indicator:\n%s", view)
+	}
+
+	// Back to the top: no ↑ indicator, hidden items announced below.
+	out = step(t, out, key("g"))
+	view = out.View()
+	if !strings.Contains(view, "▸ a1") || strings.Contains(view, "↑ 4 more") {
+		t.Errorf("top of list should show first card without ↑ indicator:\n%s", view)
+	}
+	if !strings.Contains(view, "↓ 4 more") {
+		t.Errorf("expected ↓ more indicator:\n%s", view)
 	}
 }
 

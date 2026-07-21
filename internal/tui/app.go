@@ -20,13 +20,12 @@ import (
 )
 
 var (
-	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("63"))
-	cursorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
-	dimStyle      = lipgloss.NewStyle().Faint(true)
-	selectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
-	helpStyle     = lipgloss.NewStyle().Faint(true)
-	warnStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
-	keyStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
+	titleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("63"))
+	cursorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
+	dimStyle    = lipgloss.NewStyle().Faint(true)
+	helpStyle   = lipgloss.NewStyle().Faint(true)
+	warnStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	keyStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
 
 	// Tabs render as bordered boxes; the active one gets the accent color.
 	activeTabStyle = lipgloss.NewStyle().
@@ -40,6 +39,17 @@ var (
 				BorderForeground(lipgloss.Color("240")).
 				Faint(true).
 				Padding(0, 1)
+
+	// The selected list entry renders as a card: both lines share a
+	// background block. Nested resets would cut the background, so each
+	// line carries the full style itself instead of wrapping styled text.
+	selCardNameStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("212")).
+				Background(lipgloss.Color("237"))
+	selCardDescStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("250")).
+				Background(lipgloss.Color("237"))
 )
 
 // Result is what the user chose in the TUI: the command to execute and the
@@ -95,11 +105,13 @@ type model struct {
 	tabs    []tabDef
 	active  int   // index of the active tab
 	cursors []int // per-tab cursor position, preserved across switches
+	offsets []int // per-tab scroll offset (index of the first visible card)
 	mode    mode
 	errMsg  string
 	chosen  int      // index into items of the command to execute; -1 for none
 	values  []string // argument values collected by the form
 	width   int
+	height  int
 
 	formIdx int               // index into items of the command whose args form is open
 	inputs  []textinput.Model // one per Arg of that command
@@ -116,6 +128,7 @@ func newModel(st *store.Store, items []command.Command) model {
 		items:   items,
 		tabs:    tabs,
 		cursors: make([]int, len(tabs)),
+		offsets: make([]int, len(tabs)),
 		chosen:  -1,
 		formIdx: -1,
 	}
@@ -176,6 +189,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
+		m.height = msg.Height
+		m = m.adjustScroll()
 	case tea.KeyMsg:
 		switch m.mode {
 		case modeConfirmDelete:
@@ -231,7 +246,7 @@ func (m model) updateBrowse(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.mode = modeConfirmDelete
 		}
 	}
-	return m, nil
+	return m.adjustScroll(), nil
 }
 
 func (m model) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -244,7 +259,7 @@ func (m model) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.errMsg = err.Error()
 			} else {
 				m.items = items
-				m = m.clampCursors()
+				m = m.clampCursors().adjustScroll()
 			}
 		}
 		m.mode = modeBrowse
@@ -330,6 +345,90 @@ func (m model) viewTabBar() string {
 	return lipgloss.JoinHorizontal(lipgloss.Bottom, labels...)
 }
 
+// cardWidth is the display width of the selected entry's background
+// block: wide enough for the longest line of the tab, capped at the
+// terminal width (falls back to content width before the first
+// WindowSizeMsg, e.g. in snapshots).
+func (m model) cardWidth(idxs []int) int {
+	w := 0
+	for _, idx := range idxs {
+		it := m.items[idx]
+		if lw := lipgloss.Width("▸ " + it.Name); lw > w {
+			w = lw
+		}
+		if meta := describeItem(it); meta != "" {
+			if lw := lipgloss.Width("    "+meta) + 1; lw > w {
+				w = lw
+			}
+		}
+	}
+	if m.width > 0 && w > m.width {
+		w = m.width
+	}
+	return w
+}
+
+// blockHeight is the list-line cost of one card: name (+ description)
+// plus the gap that follows it.
+func (m model) blockHeight(it command.Command) int {
+	if describeItem(it) != "" {
+		return 3
+	}
+	return 2
+}
+
+// listBudget returns how many list lines fit between the tab bar and the
+// footer. Unknown height (snapshots, before the first WindowSizeMsg)
+// means no clipping. Two lines are reserved for the ↑/↓ indicators.
+func (m model) listBudget() int {
+	if m.height <= 0 {
+		return int(^uint(0) >> 1)
+	}
+	overhead := lipgloss.Height(m.viewTabBar()) + 2 + 2
+	if m.errMsg != "" {
+		overhead++
+	}
+	b := m.height - overhead
+	if b < 3 {
+		b = 3
+	}
+	return b
+}
+
+// visibleEnd returns the index just past the last card that fits when
+// rendering starts at off.
+func (m model) visibleEnd(idxs []int, off, budget int) int {
+	used, end := 0, off
+	for i := off; i < len(idxs); i++ {
+		h := m.blockHeight(m.items[idxs[i]])
+		if used+h > budget {
+			break
+		}
+		used += h
+		end = i + 1
+	}
+	if end == off && off < len(idxs) {
+		end = off + 1 // always show at least the cursor's card
+	}
+	return end
+}
+
+// adjustScroll moves the active tab's offset so the cursor's card stays
+// inside the visible window.
+func (m model) adjustScroll() model {
+	idxs := m.tabIdxs()
+	off, cur := m.offsets[m.active], m.cursors[m.active]
+	if off > cur {
+		off = cur
+	}
+	budget := m.listBudget()
+	for off < cur && cur >= m.visibleEnd(idxs, off, budget) {
+		off++
+	}
+	m.offsets[m.active] = off
+	return m
+}
+
 // emptyTabHint tells how to add an entry of the active tab's kind.
 func (m model) emptyTabHint() string {
 	if m.tabs[m.active].kind == command.KindWorkflow {
@@ -348,19 +447,43 @@ func (m model) viewList() string {
 		b.WriteString(dimStyle.Render(m.emptyTabHint()))
 		b.WriteString("\n")
 	}
-	for pos, idx := range idxs {
-		it := m.items[idx]
-		cursor := "  "
-		name := it.Name
+	cardW := m.cardWidth(idxs)
+	off := m.offsets[m.active]
+	if off > len(idxs) {
+		off = 0
+	}
+	end := m.visibleEnd(idxs, off, m.listBudget())
+	if off > 0 {
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  ↑ %d more", off)))
+		b.WriteString("\n")
+	}
+	for pos := off; pos < end; pos++ {
+		it := m.items[idxs[pos]]
+		meta := describeItem(it)
 		if pos == m.cursors[m.active] {
-			cursor = cursorStyle.Render("▸ ")
-			name = selectedStyle.Render(name)
+			b.WriteString(selCardNameStyle.Width(cardW).Render("▸ " + it.Name))
+			b.WriteString("\n")
+			if meta != "" {
+				b.WriteString(selCardDescStyle.Width(cardW).PaddingLeft(4).Render(meta))
+				b.WriteString("\n")
+			}
+		} else {
+			b.WriteString("  " + it.Name)
+			b.WriteString("\n")
+			if meta != "" {
+				b.WriteString(dimStyle.Render("    " + meta))
+				b.WriteString("\n")
+			}
 		}
-		fmt.Fprintf(&b, "%s%s\n", cursor, name)
-		if meta := describeItem(it); meta != "" {
-			b.WriteString(dimStyle.Render("    " + meta))
+		// Breathing room between cards, matching the boxed look.
+		if pos < end-1 {
 			b.WriteString("\n")
 		}
+	}
+	if end < len(idxs) {
+		b.WriteString("\n")
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  ↓ %d more", len(idxs)-end)))
+		b.WriteString("\n")
 	}
 	b.WriteString("\n")
 
