@@ -144,9 +144,10 @@ jobs:
       - name: go build
         run: go build ./...
 
-  # Makefile 経由のビルドが壊れていないかをスモーク的に確認するジョブ。
+  # .exq/scripts 経由のビルド（開発者の日常導線）が壊れていないかを
+  # スモーク的に確認するジョブ。
   # cgo guard もここで一度だけ動かす（grep するだけで GOOS/GOARCH に依存しないため）。
-  build-make:
+  build-script:
     needs: [test, lint, format]
     runs-on: ubuntu-latest
     steps:
@@ -168,5 +169,5 @@ jobs:
             echo "$hits"
           fi
 
-      - name: make build
-        run: make build
+      - name: build via .exq script
+        run: bash .exq/scripts/build/run.sh

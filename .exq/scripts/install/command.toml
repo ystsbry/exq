@@ -1,0 +1,5 @@
+description = "exq バイナリをインストールする"
+
+[[args]]
+key = "prefix"
+description = "インストール先 PREFIX（空なら ~/.local → ~/.local/bin/exq）"

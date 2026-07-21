@@ -8,8 +8,12 @@ Git 管理から除外されるため、`.gitignore` を汚さずに自分専用
 ## インストール
 
 ```sh
-make install PREFIX=$HOME/.local
+bash .exq/scripts/install/run.sh                 # ~/.local/bin/exq にインストール
+bash .exq/scripts/install/run.sh /usr/local      # PREFIX を指定する場合
 ```
+
+このリポジトリ自身の開発スクリプトも `.exq/` で管理している（dogfooding）。
+exq インストール後は `exq run install` などで同じスクリプトを TUI / CLI から実行できる。
 
 ## 使い方
 
@@ -88,30 +92,35 @@ plugin/
 ```sh
 # Claude Code 用: plugin/ を ~/.claude/skills/exq にシンボリックリンク
 # （claude 再起動後 `claude plugin list` で確認）
-make install-claudecode
-make uninstall-claudecode
+exq run install-claudecode
+exq run uninstall-claudecode
 
 # Codex 用: 同じ plugin/ をローカル marketplace 経由でプラグイン登録
-make install-codex             # = codex plugin marketplace add <repo>
-make uninstall-codex
+exq run install-codex          # = codex plugin marketplace add <repo>
+exq run uninstall-codex
 ```
 
 > **Codex の注意点**
 > - marketplace 経由では Codex がプラグインを `~/.codex/plugins/cache/` に**コピー**する
 >   （symlink ではない）ため、SKILL.md を編集したら再インストールが必要。
-> - plugin 未対応の codex バージョン向け fallback として `make install-codex-skills` /
->   `make uninstall-codex-skills` も用意している（`~/.agents/skills/` へのディレクトリ
+> - plugin 未対応の codex バージョン向け fallback として `exq run install-codex-skills` /
+>   `exq run uninstall-codex-skills` も用意している（`~/.agents/skills/` へのディレクトリ
 >   symlink。ファイル単位の symlink は loader に落とされる: openai/codex#15756。
 >   symlink なので編集が即反映される）。
 
 ## 開発
 
+開発用スクリプトは `.exq/scripts/` にコミットされており、exq 自身で実行する（dogfooding）。
+
 ```sh
-make build   # bin/exq をビルド
-make test    # go test ./...
-make vet     # go vet
-make fmt     # gofmt
+exq run build   # bin/exq をビルド
+exq run test    # go test ./...
+exq run vet     # go vet
+exq run fmt     # gofmt
+exq run check   # fmt チェック + vet + test をまとめて実行
 ```
+
+exq が未インストールでも `bash .exq/scripts/<name>/run.sh` で直接実行できる。
 
 ### UI の確認（storybook 的な起動）
 
