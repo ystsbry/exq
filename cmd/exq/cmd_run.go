@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ystsbry/exq/internal/command"
 	"github.com/ystsbry/exq/internal/runner"
 )
 
@@ -30,8 +31,8 @@ declared in command.toml.`,
 			if err != nil {
 				return err
 			}
-			if err := ensureExecutable(c); err != nil {
-				return err
+			if c.Kind == command.KindWorkflow {
+				return executeWorkflow(st, c, values)
 			}
 			code, err := runner.Run(c, st.Root, values)
 			if err != nil {

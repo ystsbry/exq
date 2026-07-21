@@ -91,6 +91,51 @@ func TestArgsFormEscReturnsToBrowse(t *testing.T) {
 	}
 }
 
+func TestEnterOnWorkflowWithoutArgsPicksImmediately(t *testing.T) {
+	m := testModel(t, []command.Command{{
+		Name:  "pre-pr",
+		Kind:  command.KindWorkflow,
+		Steps: []string{"fmt", "test"},
+	}})
+	out := step(t, m, key("enter"))
+	if out.chosen != 0 {
+		t.Errorf("chosen = %d, want 0", out.chosen)
+	}
+	if out.mode == modeArgsForm {
+		t.Error("workflow without args must not open the args form")
+	}
+}
+
+func TestEnterOnWorkflowWithArgsOpensForm(t *testing.T) {
+	m := testModel(t, []command.Command{{
+		Name:  "install",
+		Kind:  command.KindWorkflow,
+		Steps: []string{"build", "install-bin ${prefix}"},
+		Args:  []command.Arg{{Key: "prefix"}},
+	}})
+	out := step(t, m, key("enter"))
+	if out.mode != modeArgsForm {
+		t.Fatalf("mode = %v, want modeArgsForm", out.mode)
+	}
+	out = step(t, out, key("~"), key("enter"))
+	if out.chosen != 0 || len(out.values) != 1 || out.values[0] != "~" {
+		t.Errorf("chosen=%d values=%q, want 0/[~]", out.chosen, out.values)
+	}
+}
+
+func TestListViewShowsWorkflowSteps(t *testing.T) {
+	m := testModel(t, []command.Command{{
+		Name:        "pre-pr",
+		Description: "checks",
+		Kind:        command.KindWorkflow,
+		Steps:       []string{"fmt", "test"},
+	}})
+	view := m.View()
+	if !strings.Contains(view, "steps: fmt → test") {
+		t.Errorf("list view should show step sequence:\n%s", view)
+	}
+}
+
 func TestArgsFormViewShowsKeysAndDescriptions(t *testing.T) {
 	m := testModel(t, []command.Command{{
 		Name:        "deploy",

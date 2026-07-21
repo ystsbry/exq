@@ -123,7 +123,9 @@ func (m model) updateBrowse(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			break
 		}
 		// Commands without declared args keep the two-keystroke flow:
-		// enter picks and quits immediately.
+		// enter picks and quits immediately. Scripts and workflows share
+		// the same form — workflows declare [[args]] and feed the values
+		// to their steps via ${key} placeholders.
 		if len(m.items[m.cursor].Args) == 0 {
 			m.chosen = m.cursor
 			return m, tea.Quit
@@ -294,10 +296,13 @@ func (m model) viewArgsForm() string {
 }
 
 // describeItem is the dim meta line under a command name in the list:
-// the description plus the declared argument keys, either part optional.
+// the description plus the declared argument keys (scripts) or the step
+// sequence (workflows), either part optional.
 func describeItem(it command.Command) string {
 	meta := it.Description
-	if len(it.Args) > 0 {
+	if it.Kind == command.KindWorkflow && len(it.Steps) > 0 {
+		meta = strings.TrimSpace(meta + " (steps: " + strings.Join(it.Steps, " → ") + ")")
+	} else if len(it.Args) > 0 {
 		keys := make([]string, len(it.Args))
 		for i, a := range it.Args {
 			keys[i] = a.Key

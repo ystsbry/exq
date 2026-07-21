@@ -10,6 +10,7 @@ import (
 	"github.com/ystsbry/exq/internal/runner"
 	"github.com/ystsbry/exq/internal/store"
 	"github.com/ystsbry/exq/internal/tui"
+	"github.com/ystsbry/exq/internal/workflow"
 )
 
 var (
@@ -65,8 +66,8 @@ func runTUI() error {
 	if res == nil {
 		return nil
 	}
-	if err := ensureExecutable(res.Command); err != nil {
-		return err
+	if res.Command.Kind == command.KindWorkflow {
+		return executeWorkflow(st, res.Command, res.Values)
 	}
 	code, err := runner.Run(res.Command, st.Root, res.Values)
 	if err != nil {
@@ -78,12 +79,26 @@ func runTUI() error {
 	return nil
 }
 
-// ensureExecutable rejects kinds the runner cannot execute yet, with a
-// message that beats the raw "run.sh: no such file" it would otherwise hit.
-func ensureExecutable(c command.Command) error {
-	if c.Kind == command.KindWorkflow {
-		return fmt.Errorf("%q is a workflow — workflow execution is not implemented yet", c.Name)
+// executeWorkflow runs a workflow with progress on stdout and prints the
+// per-step summary. A failing step makes exq exit with that step's exit
+// code; pre-flight validation failures are returned as a plain error.
+func executeWorkflow(st *store.Store, c command.Command, values []string) error {
+	res, err := workflow.Run(st, c, st.Root, values, os.Stdout)
+	if err != nil {
+		return err
 	}
+	fmt.Println()
+	fmt.Print(workflow.Summary(res))
+	fmt.Println()
+	if f := res.Failed(); f != nil {
+		fmt.Printf("workflow %s failed at step %s\n", c.Name, f.Name)
+		code := f.ExitCode
+		if code <= 0 {
+			code = 1
+		}
+		os.Exit(code)
+	}
+	fmt.Printf("workflow %s: all %d steps succeeded\n", c.Name, len(res.Steps))
 	return nil
 }
 

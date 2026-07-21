@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/ystsbry/exq/internal/runner"
 	"github.com/ystsbry/exq/internal/store"
 	"github.com/ystsbry/exq/internal/tui"
+	"github.com/ystsbry/exq/internal/workflow"
 )
 
 // sampleCommands is the fixture set the demo store is populated with.
@@ -45,6 +47,41 @@ description = "対象サービス名（空なら全サービス）"
 `,
 		script: "#!/bin/sh\necho \"[demo] tail-logs: pretending to tail logs...\"\n",
 	},
+	{
+		name: "broken-step",
+		meta: `description = "常に失敗するステップ（ワークフローの失敗例用）"
+`,
+		script: "#!/bin/sh\necho \"[demo] broken-step: failing on purpose\" >&2\nexit 1\n",
+	},
+}
+
+// sampleWorkflows exercises the workflow path: one that succeeds and one
+// that fails mid-way so the summary shows ✓ / ✗ / skipped at once.
+var sampleWorkflows = []struct {
+	name, meta string
+}{
+	{
+		name: "morning-setup",
+		meta: `description = "朝の開発開始ルーチン（成功する例）"
+steps = ["reset-db", "tail-logs"]
+`,
+	},
+	{
+		name: "failing-flow",
+		meta: `description = "途中で失敗するワークフローの例"
+steps = ["reset-db", "broken-step", "tail-logs"]
+`,
+	},
+	{
+		name: "deploy-flow",
+		meta: `description = "DB リセット後にデプロイする（引数付きワークフローの例）"
+steps = ["reset-db", "deploy-local ${env}"]
+
+[[args]]
+key = "env"
+description = "デプロイ先環境 (dev / prod)"
+`,
+	},
 }
 
 func newDemoCmd() *cobra.Command {
@@ -78,6 +115,14 @@ is rendered to stdout instead — no TTY or key input needed.`,
 				for _, s := range tui.Snapshots(st, items) {
 					fmt.Fprintf(out, "=== %s ===\n%s\n", s.Name, s.View)
 				}
+				// The post-run summary is terminal output, not a TUI
+				// state, so it is rendered here from a fixed fixture.
+				sum := workflow.Summary(&workflow.Result{Steps: []workflow.StepResult{
+					{Name: "reset-db", Status: workflow.StatusSuccess, Duration: 300 * time.Millisecond},
+					{Name: "broken-step", Status: workflow.StatusFailed, ExitCode: 1, Duration: 2100 * time.Millisecond},
+					{Name: "tail-logs", Status: workflow.StatusSkipped},
+				}})
+				fmt.Fprintf(out, "=== workflow-summary ===\n%s\n", sum)
 				return nil
 			}
 
@@ -87,6 +132,9 @@ is rendered to stdout instead — no TTY or key input needed.`,
 			}
 			if res == nil {
 				return nil
+			}
+			if res.Command.Kind == command.KindWorkflow {
+				return executeWorkflow(st, res.Command, res.Values)
 			}
 			code, err := runner.Run(res.Command, st.Root, res.Values)
 			if err != nil {
@@ -134,6 +182,17 @@ func newDemoStore(empty bool) (*store.Store, func(), error) {
 				return nil, nil, err
 			}
 			if err := os.WriteFile(filepath.Join(dir, command.RunFile), []byte(s.script), 0o755); err != nil {
+				cleanup()
+				return nil, nil, err
+			}
+		}
+		for _, w := range sampleWorkflows {
+			dir := filepath.Join(st.WorkflowsDir(), w.name)
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				cleanup()
+				return nil, nil, err
+			}
+			if err := os.WriteFile(filepath.Join(dir, command.MetaFile), []byte(w.meta), 0o644); err != nil {
 				cleanup()
 				return nil, nil, err
 			}

@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/ystsbry/exq/internal/command"
 )
 
 func newListCmd() *cobra.Command {
@@ -35,7 +37,9 @@ func newListCmd() *cobra.Command {
 			}
 			for _, c := range cmds {
 				meta := c.Description
-				if len(c.Args) > 0 {
+				if c.Kind == command.KindWorkflow && len(c.Steps) > 0 {
+					meta = strings.TrimSpace(meta + " (steps: " + strings.Join(c.Steps, " → ") + ")")
+				} else if len(c.Args) > 0 {
 					keys := make([]string, len(c.Args))
 					for i, a := range c.Args {
 						keys[i] = a.Key

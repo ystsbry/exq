@@ -48,6 +48,7 @@ type Command struct {
 	Name        string
 	Description string
 	Args        []Arg
+	Steps       []string // ordered script names; non-empty only for workflows
 	Kind        Kind
 	Dir         string // absolute path to .exq/scripts/<name> or .exq/workflows/<name>
 }
@@ -59,8 +60,9 @@ func (c Command) RunPath() string {
 
 // meta mirrors command.toml.
 type meta struct {
-	Description string `toml:"description"`
-	Args        []Arg  `toml:"args"`
+	Description string   `toml:"description"`
+	Args        []Arg    `toml:"args"`
+	Steps       []string `toml:"steps"`
 }
 
 // Load reads the command stored at dir. A missing or malformed command.toml
@@ -75,6 +77,7 @@ func Load(dir string) Command {
 	if _, err := toml.DecodeFile(filepath.Join(dir, MetaFile), &m); err == nil {
 		c.Description = m.Description
 		c.Args = m.Args
+		c.Steps = m.Steps
 	}
 	return c
 }
