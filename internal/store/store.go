@@ -199,7 +199,14 @@ func (s *Store) List() ([]command.Command, error) {
 			cmds = append(cmds, c)
 		}
 	}
-	sort.Slice(cmds, func(i, j int) bool { return cmds[i].Name < cmds[j].Name })
+	// Kind-major order so the UIs can render a scripts section followed
+	// by a workflows section without re-sorting.
+	sort.Slice(cmds, func(i, j int) bool {
+		if cmds[i].Kind != cmds[j].Kind {
+			return cmds[i].Kind < cmds[j].Kind
+		}
+		return cmds[i].Name < cmds[j].Name
+	})
 	return cmds, nil
 }
 

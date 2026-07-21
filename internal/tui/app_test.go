@@ -123,6 +123,23 @@ func TestEnterOnWorkflowWithArgsOpensForm(t *testing.T) {
 	}
 }
 
+func TestListViewShowsKindSections(t *testing.T) {
+	m := testModel(t, []command.Command{
+		{Name: "build", Kind: command.KindScript},
+		{Name: "vet", Kind: command.KindScript},
+		{Name: "check", Kind: command.KindWorkflow, Steps: []string{"vet"}},
+	})
+	view := m.View()
+	for _, want := range []string{"scripts (2)", "workflows (1)"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("list view missing section %q:\n%s", want, view)
+		}
+	}
+	if strings.Index(view, "scripts (2)") > strings.Index(view, "workflows (1)") {
+		t.Errorf("scripts section should come first:\n%s", view)
+	}
+}
+
 func TestListViewShowsWorkflowSteps(t *testing.T) {
 	m := testModel(t, []command.Command{{
 		Name:        "pre-pr",

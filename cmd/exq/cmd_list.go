@@ -35,7 +35,19 @@ func newListCmd() *cobra.Command {
 					width = len(c.Name)
 				}
 			}
-			for _, c := range cmds {
+			// cmds arrive kind-major from the store: scripts first, then
+			// workflows, each under its own section header.
+			for i, c := range cmds {
+				if i == 0 || c.Kind != cmds[i-1].Kind {
+					if i > 0 {
+						fmt.Fprintln(out)
+					}
+					label := "scripts"
+					if c.Kind == command.KindWorkflow {
+						label = "workflows"
+					}
+					fmt.Fprintf(out, "%s:\n", label)
+				}
 				meta := c.Description
 				if c.Kind == command.KindWorkflow && len(c.Steps) > 0 {
 					meta = strings.TrimSpace(meta + " (steps: " + strings.Join(c.Steps, " → ") + ")")
@@ -46,7 +58,7 @@ func newListCmd() *cobra.Command {
 					}
 					meta = strings.TrimSpace(meta + " (args: " + strings.Join(keys, ", ") + ")")
 				}
-				fmt.Fprintf(out, "%-*s  %s\n", width, c.Name, meta)
+				fmt.Fprintf(out, "  %-*s  %s\n", width, c.Name, meta)
 			}
 			return nil
 		},

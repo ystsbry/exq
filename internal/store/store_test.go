@@ -268,12 +268,12 @@ func TestListDiscoversWorkflowsAndKinds(t *testing.T) {
 	if len(cmds) != 2 {
 		t.Fatalf("expected 2 entries, got %+v", cmds)
 	}
-	kinds := map[string]command.Kind{}
-	for _, c := range cmds {
-		kinds[c.Name] = c.Kind
+	// Kind-major order: scripts first, then workflows.
+	if cmds[0].Name != "build" || cmds[0].Kind != command.KindScript {
+		t.Errorf("first entry should be the script: %+v", cmds[0])
 	}
-	if kinds["build"] != command.KindScript || kinds["pre-pr"] != command.KindWorkflow {
-		t.Errorf("kinds wrong: %v", kinds)
+	if cmds[1].Name != "pre-pr" || cmds[1].Kind != command.KindWorkflow {
+		t.Errorf("second entry should be the workflow: %+v", cmds[1])
 	}
 
 	wf, err := st.Get("pre-pr")

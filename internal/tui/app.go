@@ -26,6 +26,7 @@ var (
 	helpStyle     = lipgloss.NewStyle().Faint(true)
 	warnStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 	keyStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
+	sectionStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("63")).Faint(true)
 )
 
 // Result is what the user chose in the TUI: the command to execute and the
@@ -230,7 +231,16 @@ func (m model) viewList() string {
 		b.WriteString(dimStyle.Render("  no commands yet — add one under " + m.store.ScriptsDir()))
 		b.WriteString("\n")
 	}
+	// Items arrive kind-major from the store, so a header is emitted
+	// whenever the kind changes (scripts section, then workflows).
 	for i, it := range m.items {
+		if i == 0 || it.Kind != m.items[i-1].Kind {
+			if i > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString(sectionStyle.Render(sectionLabel(it.Kind, m.items)))
+			b.WriteString("\n")
+		}
 		cursor := "  "
 		name := it.Name
 		if i == m.cursor {
@@ -293,6 +303,21 @@ func (m model) viewArgsForm() string {
 	b.WriteString(helpStyle.Render("tab/↑↓: move   enter: run (empty = \"\")   esc: back"))
 	b.WriteString("\n")
 	return b.String()
+}
+
+// sectionLabel names the list section for a kind, with its entry count.
+func sectionLabel(kind command.Kind, items []command.Command) string {
+	n := 0
+	for _, it := range items {
+		if it.Kind == kind {
+			n++
+		}
+	}
+	name := "scripts"
+	if kind == command.KindWorkflow {
+		name = "workflows"
+	}
+	return fmt.Sprintf("%s (%d)", name, n)
 }
 
 // describeItem is the dim meta line under a command name in the list:
