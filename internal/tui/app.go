@@ -1,5 +1,6 @@
-// Package tui provides the interactive command list: browse commands,
-// pick one to execute (filling its declared arguments in a form), or
+// Package tui provides the interactive command browser: a top tab bar
+// (scripts / workflows) with ←/→ switching, a per-tab list to pick a
+// command to execute (filling its declared arguments in a form), or
 // delete one. The program runs to completion and returns the command the
 // user chose to run plus the argument values (nil when they just quit);
 // actually executing it is left to the caller so the terminal is restored
@@ -26,7 +27,19 @@ var (
 	helpStyle     = lipgloss.NewStyle().Faint(true)
 	warnStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 	keyStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
-	sectionStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("63")).Faint(true)
+
+	// Tabs render as bordered boxes; the active one gets the accent color.
+	activeTabStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("205")).
+			Foreground(lipgloss.Color("212")).
+			Bold(true).
+			Padding(0, 1)
+	inactiveTabStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("240")).
+				Faint(true).
+				Padding(0, 1)
 )
 
 // Result is what the user chose in the TUI: the command to execute and the
@@ -36,15 +49,15 @@ type Result struct {
 	Values  []string
 }
 
-// Run shows the command list until the user picks a command to execute or
-// quits. Commands with declared [[args]] go through an input form first.
-// Returns nil when the user quit without choosing.
+// Run shows the tabbed command browser until the user picks a command to
+// execute or quits. Commands with declared [[args]] go through an input
+// form first. Returns nil when the user quit without choosing.
 func Run(st *store.Store) (*Result, error) {
 	items, err := st.List()
 	if err != nil {
 		return nil, err
 	}
-	m := model{store: st, items: items, chosen: -1}
+	m := newModel(st, items)
 	final, err := tea.NewProgram(m).Run()
 	if err != nil {
 		return nil, err
@@ -64,18 +77,93 @@ const (
 	modeArgsForm
 )
 
-type model struct {
-	store  *store.Store
-	items  []command.Command
-	cursor int
-	mode   mode
-	errMsg string
-	chosen int      // index of the command to execute after quit; -1 for none
-	values []string // argument values collected by the form
-	width  int
+// tabDef is one entry in the top tab bar. Both current tabs render the
+// command list filtered by kind; future tabs (logs, history, …) plug in
+// by appending a tabDef here and branching to their own view/update in
+// the model — the bar, ←/→ switching, and per-tab cursor bookkeeping are
+// already generic over the tab list.
+type tabDef struct {
+	title string
+	kind  command.Kind
+}
 
-	inputs []textinput.Model // one per Arg of the command under the cursor
-	focus  int               // focused index in inputs
+type model struct {
+	store   *store.Store
+	items   []command.Command
+	tabs    []tabDef
+	active  int   // index of the active tab
+	cursors []int // per-tab cursor position, preserved across switches
+	mode    mode
+	errMsg  string
+	chosen  int      // index into items of the command to execute; -1 for none
+	values  []string // argument values collected by the form
+	width   int
+
+	formIdx int               // index into items of the command whose args form is open
+	inputs  []textinput.Model // one per Arg of that command
+	focus   int               // focused index in inputs
+}
+
+func newModel(st *store.Store, items []command.Command) model {
+	tabs := []tabDef{
+		{title: "scripts", kind: command.KindScript},
+		{title: "workflows", kind: command.KindWorkflow},
+	}
+	return model{
+		store:   st,
+		items:   items,
+		tabs:    tabs,
+		cursors: make([]int, len(tabs)),
+		chosen:  -1,
+		formIdx: -1,
+	}
+}
+
+// tabIdxs returns the indices into items that belong to the active tab.
+func (m model) tabIdxs() []int {
+	var idxs []int
+	for i, it := range m.items {
+		if it.Kind == m.tabs[m.active].kind {
+			idxs = append(idxs, i)
+		}
+	}
+	return idxs
+}
+
+// current returns the items index under the active tab's cursor.
+func (m model) current() (int, bool) {
+	idxs := m.tabIdxs()
+	cur := m.cursors[m.active]
+	if len(idxs) == 0 || cur >= len(idxs) {
+		return -1, false
+	}
+	return idxs[cur], true
+}
+
+// kindCount counts the items of one kind.
+func (m model) kindCount(k command.Kind) int {
+	n := 0
+	for _, it := range m.items {
+		if it.Kind == k {
+			n++
+		}
+	}
+	return n
+}
+
+// clampCursors pulls every tab cursor back into range after items changed.
+func (m model) clampCursors() model {
+	for ti, t := range m.tabs {
+		n := m.kindCount(t.kind)
+		if m.cursors[ti] >= n {
+			if n == 0 {
+				m.cursors[ti] = 0
+			} else {
+				m.cursors[ti] = n - 1
+			}
+		}
+	}
+	return m
 }
 
 func (m model) Init() tea.Cmd {
@@ -105,35 +193,39 @@ func (m model) updateBrowse(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c", "q", "esc":
 		m.chosen = -1
 		return m, tea.Quit
+	case "left":
+		m.active = (m.active - 1 + len(m.tabs)) % len(m.tabs)
+	case "right":
+		m.active = (m.active + 1) % len(m.tabs)
 	case "up", "k":
-		if m.cursor > 0 {
-			m.cursor--
+		if m.cursors[m.active] > 0 {
+			m.cursors[m.active]--
 		}
 	case "down", "j":
-		if m.cursor < len(m.items)-1 {
-			m.cursor++
+		if m.cursors[m.active] < len(m.tabIdxs())-1 {
+			m.cursors[m.active]++
 		}
 	case "g":
-		m.cursor = 0
+		m.cursors[m.active] = 0
 	case "G":
-		if len(m.items) > 0 {
-			m.cursor = len(m.items) - 1
+		if n := len(m.tabIdxs()); n > 0 {
+			m.cursors[m.active] = n - 1
 		}
 	case "enter":
-		if len(m.items) == 0 {
+		idx, ok := m.current()
+		if !ok {
 			break
 		}
 		// Commands without declared args keep the two-keystroke flow:
-		// enter picks and quits immediately. Scripts and workflows share
-		// the same form — workflows declare [[args]] and feed the values
-		// to their steps via ${key} placeholders.
-		if len(m.items[m.cursor].Args) == 0 {
-			m.chosen = m.cursor
+		// enter picks and quits immediately.
+		if len(m.items[idx].Args) == 0 {
+			m.chosen = idx
 			return m, tea.Quit
 		}
+		m.formIdx = idx
 		return m.enterArgsForm()
 	case "d":
-		if len(m.items) > 0 {
+		if _, ok := m.current(); ok {
 			m.mode = modeConfirmDelete
 		}
 	}
@@ -143,15 +235,14 @@ func (m model) updateBrowse(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
-		name := m.items[m.cursor].Name
-		if err := m.store.Remove(name); err != nil {
-			m.errMsg = err.Error()
-		} else if items, err := m.store.List(); err != nil {
-			m.errMsg = err.Error()
-		} else {
-			m.items = items
-			if m.cursor >= len(m.items) && m.cursor > 0 {
-				m.cursor = len(m.items) - 1
+		if idx, ok := m.current(); ok {
+			if err := m.store.Remove(m.items[idx].Name); err != nil {
+				m.errMsg = err.Error()
+			} else if items, err := m.store.List(); err != nil {
+				m.errMsg = err.Error()
+			} else {
+				m.items = items
+				m = m.clampCursors()
 			}
 		}
 		m.mode = modeBrowse
@@ -161,10 +252,10 @@ func (m model) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// enterArgsForm switches to the argument form for the command under the
-// cursor, with one text input per declared arg and the first one focused.
+// enterArgsForm switches to the argument form for items[formIdx], with
+// one text input per declared arg and the first one focused.
 func (m model) enterArgsForm() (tea.Model, tea.Cmd) {
-	args := m.items[m.cursor].Args
+	args := m.items[m.formIdx].Args
 	m.inputs = make([]textinput.Model, len(args))
 	for i := range args {
 		ti := textinput.New()
@@ -187,13 +278,14 @@ func (m model) updateArgsForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.mode = modeBrowse
 		m.inputs = nil
+		m.formIdx = -1
 		return m, nil
 	case "enter":
 		m.values = make([]string, len(m.inputs))
 		for i, in := range m.inputs {
 			m.values[i] = in.Value()
 		}
-		m.chosen = m.cursor
+		m.chosen = m.formIdx
 		return m, tea.Quit
 	case "tab", "down":
 		return m.focusInput(m.focus + 1), nil
@@ -222,28 +314,43 @@ func (m model) View() string {
 	return m.viewList()
 }
 
+// viewTabBar renders the boxed tabs, active one highlighted.
+func (m model) viewTabBar() string {
+	labels := make([]string, len(m.tabs))
+	for i, t := range m.tabs {
+		label := fmt.Sprintf("%s (%d)", t.title, m.kindCount(t.kind))
+		if i == m.active {
+			labels[i] = activeTabStyle.Render(label)
+		} else {
+			labels[i] = inactiveTabStyle.Render(label)
+		}
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Bottom, labels...)
+}
+
+// emptyTabHint tells how to add an entry of the active tab's kind.
+func (m model) emptyTabHint() string {
+	if m.tabs[m.active].kind == command.KindWorkflow {
+		return "  no workflows yet — define steps in " + m.store.WorkflowsDir() + "/<name>/command.toml"
+	}
+	return "  no scripts yet — add one under " + m.store.ScriptsDir()
+}
+
 func (m model) viewList() string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render(fmt.Sprintf("exq commands (%d)", len(m.items))))
-	b.WriteString("\n\n")
+	b.WriteString(m.viewTabBar())
+	b.WriteString("\n")
 
-	if len(m.items) == 0 {
-		b.WriteString(dimStyle.Render("  no commands yet — add one under " + m.store.ScriptsDir()))
+	idxs := m.tabIdxs()
+	if len(idxs) == 0 {
+		b.WriteString(dimStyle.Render(m.emptyTabHint()))
 		b.WriteString("\n")
 	}
-	// Items arrive kind-major from the store, so a header is emitted
-	// whenever the kind changes (scripts section, then workflows).
-	for i, it := range m.items {
-		if i == 0 || it.Kind != m.items[i-1].Kind {
-			if i > 0 {
-				b.WriteString("\n")
-			}
-			b.WriteString(sectionStyle.Render(sectionLabel(it.Kind, m.items)))
-			b.WriteString("\n")
-		}
+	for pos, idx := range idxs {
+		it := m.items[idx]
 		cursor := "  "
 		name := it.Name
-		if i == m.cursor {
+		if pos == m.cursors[m.active] {
 			cursor = cursorStyle.Render("▸ ")
 			name = selectedStyle.Render(name)
 		}
@@ -261,16 +368,18 @@ func (m model) viewList() string {
 	}
 	switch m.mode {
 	case modeConfirmDelete:
-		b.WriteString(warnStyle.Render(fmt.Sprintf("delete %q? [y/N]", m.items[m.cursor].Name)))
+		if idx, ok := m.current(); ok {
+			b.WriteString(warnStyle.Render(fmt.Sprintf("delete %q? [y/N]", m.items[idx].Name)))
+		}
 	default:
-		b.WriteString(helpStyle.Render("↑/↓ or j/k: move   enter: run   d: delete   q/esc: quit"))
+		b.WriteString(helpStyle.Render("←/→: switch tab   ↑/↓ or j/k: move   enter: run   d: delete   q/esc: quit"))
 	}
 	b.WriteString("\n")
 	return b.String()
 }
 
 func (m model) viewArgsForm() string {
-	it := m.items[m.cursor]
+	it := m.items[m.formIdx]
 	var b strings.Builder
 
 	head := "run: " + it.Name
@@ -303,21 +412,6 @@ func (m model) viewArgsForm() string {
 	b.WriteString(helpStyle.Render("tab/↑↓: move   enter: run (empty = \"\")   esc: back"))
 	b.WriteString("\n")
 	return b.String()
-}
-
-// sectionLabel names the list section for a kind, with its entry count.
-func sectionLabel(kind command.Kind, items []command.Command) string {
-	n := 0
-	for _, it := range items {
-		if it.Kind == kind {
-			n++
-		}
-	}
-	name := "scripts"
-	if kind == command.KindWorkflow {
-		name = "workflows"
-	}
-	return fmt.Sprintf("%s (%d)", name, n)
 }
 
 // describeItem is the dim meta line under a command name in the list:

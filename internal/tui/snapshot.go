@@ -13,11 +13,11 @@ type Snapshot struct {
 	View string
 }
 
-// Snapshots renders each distinct UI state with the given items. The empty
-// state is always rendered from a nil list; when items itself is empty, a
-// built-in fixture stands in for the item-dependent states so every state
-// still renders. The args-form state uses the first command that declares
-// [[args]], falling back to a built-in argful fixture.
+// Snapshots renders each distinct UI state with the given items. The
+// empty state is always rendered from a nil list; when items itself is
+// empty, built-in fixtures stand in for the item-dependent states so
+// every state still renders. The args-form state uses the first command
+// that declares [[args]], falling back to a built-in argful fixture.
 func Snapshots(st *store.Store, items []command.Command) []Snapshot {
 	if len(items) == 0 {
 		items = []command.Command{
@@ -44,28 +44,25 @@ func Snapshots(st *store.Store, items []command.Command) []Snapshot {
 		}}
 		formIdx = 0
 	}
-	formModel, _ := model{store: st, items: formItems, cursor: formIdx, chosen: -1}.enterArgsForm()
+	formBase := newModel(st, formItems)
+	formBase.formIdx = formIdx
+	formModel, _ := formBase.enterArgsForm()
+
+	workflowsTab := newModel(st, items)
+	workflowsTab.active = 1
+
+	confirm := newModel(st, items)
+	confirm.mode = modeConfirmDelete
+
+	withErr := newModel(st, items)
+	withErr.errMsg = "remove sample-command: permission denied"
 
 	return []Snapshot{
-		{
-			Name: "browse",
-			View: model{store: st, items: items, cursor: min(1, len(items)-1)}.View(),
-		},
-		{
-			Name: "browse-empty",
-			View: model{store: st}.View(),
-		},
-		{
-			Name: "confirm-delete",
-			View: model{store: st, items: items, mode: modeConfirmDelete}.View(),
-		},
-		{
-			Name: "args-form",
-			View: formModel.View(),
-		},
-		{
-			Name: "error",
-			View: model{store: st, items: items, errMsg: "remove sample-command: permission denied"}.View(),
-		},
+		{Name: "browse", View: newModel(st, items).View()},
+		{Name: "browse-workflows", View: workflowsTab.View()},
+		{Name: "browse-empty", View: newModel(st, nil).View()},
+		{Name: "confirm-delete", View: confirm.View()},
+		{Name: "args-form", View: formModel.View()},
+		{Name: "error", View: withErr.View()},
 	}
 }

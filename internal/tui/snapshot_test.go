@@ -27,7 +27,7 @@ func TestSnapshotsRenderAllStates(t *testing.T) {
 		byName[s.Name] = s.View
 	}
 
-	for _, want := range []string{"browse", "browse-empty", "confirm-delete", "args-form", "error"} {
+	for _, want := range []string{"browse", "browse-workflows", "browse-empty", "confirm-delete", "args-form", "error"} {
 		if _, ok := byName[want]; !ok {
 			t.Errorf("missing snapshot %q", want)
 		}
@@ -38,7 +38,13 @@ func TestSnapshotsRenderAllStates(t *testing.T) {
 	if !strings.Contains(byName["browse"], "alpha") {
 		t.Errorf("browse snapshot should list commands:\n%s", byName["browse"])
 	}
-	if !strings.Contains(byName["browse-empty"], "no commands yet") {
+	if !strings.Contains(byName["browse"], "scripts (2)") {
+		t.Errorf("browse snapshot should show the tab bar:\n%s", byName["browse"])
+	}
+	if !strings.Contains(byName["browse-workflows"], "no workflows yet") {
+		t.Errorf("workflows tab snapshot should show the empty hint (fixture has no workflows):\n%s", byName["browse-workflows"])
+	}
+	if !strings.Contains(byName["browse-empty"], "no scripts yet") {
 		t.Errorf("empty snapshot should show the empty hint:\n%s", byName["browse-empty"])
 	}
 	if !strings.Contains(byName["confirm-delete"], "delete") {

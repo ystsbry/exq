@@ -18,6 +18,12 @@ func key(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyEscape}
 	case "tab":
 		return tea.KeyMsg{Type: tea.KeyTab}
+	case "left":
+		return tea.KeyMsg{Type: tea.KeyLeft}
+	case "right":
+		return tea.KeyMsg{Type: tea.KeyRight}
+	case "down":
+		return tea.KeyMsg{Type: tea.KeyDown}
 	default:
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 	}
@@ -37,7 +43,7 @@ func testModel(t *testing.T, items []command.Command) model {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return model{store: st, items: items, chosen: -1}
+	return newModel(st, items)
 }
 
 func TestEnterWithoutArgsPicksImmediately(t *testing.T) {
@@ -97,7 +103,8 @@ func TestEnterOnWorkflowWithoutArgsPicksImmediately(t *testing.T) {
 		Kind:  command.KindWorkflow,
 		Steps: []string{"fmt", "test"},
 	}})
-	out := step(t, m, key("enter"))
+	// Workflows live on the second tab.
+	out := step(t, m, key("right"), key("enter"))
 	if out.chosen != 0 {
 		t.Errorf("chosen = %d, want 0", out.chosen)
 	}
@@ -113,7 +120,7 @@ func TestEnterOnWorkflowWithArgsOpensForm(t *testing.T) {
 		Steps: []string{"build", "install-bin ${prefix}"},
 		Args:  []command.Arg{{Key: "prefix"}},
 	}})
-	out := step(t, m, key("enter"))
+	out := step(t, m, key("right"), key("enter"))
 	if out.mode != modeArgsForm {
 		t.Fatalf("mode = %v, want modeArgsForm", out.mode)
 	}
@@ -123,7 +130,7 @@ func TestEnterOnWorkflowWithArgsOpensForm(t *testing.T) {
 	}
 }
 
-func TestListViewShowsKindSections(t *testing.T) {
+func TestTabBarShowsBothTabsWithCounts(t *testing.T) {
 	m := testModel(t, []command.Command{
 		{Name: "build", Kind: command.KindScript},
 		{Name: "vet", Kind: command.KindScript},
@@ -132,11 +139,40 @@ func TestListViewShowsKindSections(t *testing.T) {
 	view := m.View()
 	for _, want := range []string{"scripts (2)", "workflows (1)"} {
 		if !strings.Contains(view, want) {
-			t.Errorf("list view missing section %q:\n%s", want, view)
+			t.Errorf("view missing tab %q:\n%s", want, view)
 		}
 	}
-	if strings.Index(view, "scripts (2)") > strings.Index(view, "workflows (1)") {
-		t.Errorf("scripts section should come first:\n%s", view)
+	// The scripts tab is active by default: its entries are listed, the
+	// workflow's are not.
+	if !strings.Contains(view, "build") || strings.Contains(view, "▸ check") {
+		t.Errorf("scripts tab should list scripts only:\n%s", view)
+	}
+}
+
+func TestTabSwitchFiltersAndPreservesCursor(t *testing.T) {
+	m := testModel(t, []command.Command{
+		{Name: "build", Kind: command.KindScript},
+		{Name: "vet", Kind: command.KindScript},
+		{Name: "check", Kind: command.KindWorkflow, Steps: []string{"vet"}},
+	})
+	// Move down inside scripts, hop to workflows and back: the scripts
+	// cursor must still be on the second entry.
+	out := step(t, m, key("down"), key("right"))
+	if out.active != 1 {
+		t.Fatalf("active = %d, want 1", out.active)
+	}
+	view := out.View()
+	if !strings.Contains(view, "check") || strings.Contains(view, "▸ build") {
+		t.Errorf("workflows tab should list workflows only:\n%s", view)
+	}
+	out = step(t, out, key("left"))
+	if out.active != 0 || out.cursors[0] != 1 {
+		t.Errorf("active=%d cursors[0]=%d, want 0/1", out.active, out.cursors[0])
+	}
+	// Wrap-around: left from the first tab reaches the last.
+	out = step(t, out, key("left"))
+	if out.active != 1 {
+		t.Errorf("active = %d, want 1 (wrap)", out.active)
 	}
 }
 
@@ -147,9 +183,26 @@ func TestListViewShowsWorkflowSteps(t *testing.T) {
 		Kind:        command.KindWorkflow,
 		Steps:       []string{"fmt", "test"},
 	}})
-	view := m.View()
+	out := step(t, m, key("right"))
+	view := out.View()
 	if !strings.Contains(view, "steps: fmt → test") {
-		t.Errorf("list view should show step sequence:\n%s", view)
+		t.Errorf("workflows tab should show step sequence:\n%s", view)
+	}
+}
+
+func TestEmptyTabShowsHint(t *testing.T) {
+	m := testModel(t, []command.Command{
+		{Name: "build", Kind: command.KindScript},
+	})
+	out := step(t, m, key("right"))
+	view := out.View()
+	if !strings.Contains(view, "no workflows yet") {
+		t.Errorf("empty workflows tab should show a hint:\n%s", view)
+	}
+	// Enter on an empty tab must not pick anything.
+	out = step(t, out, key("enter"))
+	if out.chosen != -1 {
+		t.Errorf("chosen = %d, want -1 on empty tab", out.chosen)
 	}
 }
 

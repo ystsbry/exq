@@ -19,7 +19,7 @@ exq インストール後は `exq run install` などで同じスクリプトを
 
 ```sh
 exq init                       # ./.exq/scripts と ./.exq/workflows を作成し、.git/info/exclude に .exq/ を追記
-exq                            # TUI を開く（enter: 実行 / d: 削除 / q: 終了）
+exq                            # TUI を開く（←/→: scripts / workflows タブ切替, enter: 実行, d: 削除, q: 終了）
 exq list                       # コマンド一覧
 exq run <name> [-- <values...>] # コマンドを実行（-- 以降は引数として $1, $2, ... に渡る）
 exq remove <name>              # コマンドを削除（-y で確認スキップ）
