@@ -1,0 +1,5 @@
+description = "コンソールアプリを実行する (dotnet run)"
+
+[[args]]
+key = "name"
+description = "挨拶する相手の名前（空なら world）"
