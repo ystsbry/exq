@@ -1,0 +1,5 @@
+description = "条件を指定してテストを絞り込み実行する (dotnet test --filter)"
+
+[[args]]
+key = "filter"
+description = "--filter に渡す式（例: FullyQualifiedName~WithoutName。空なら全テスト）"
