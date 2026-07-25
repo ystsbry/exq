@@ -1,0 +1,63 @@
+# revu プロジェクト共有設定（コミット対象）
+#
+# 優先度: ~/.config/revu/ < <repo>/.revu/ < <repo>/.revu-local/
+# 個人ローカルで上書きしたい設定は <repo>/.revu-local/config.toml に置く。
+#
+# 参考: https://github.com/ystsbry/revu  (README の「設定ファイル」節)
+
+[editor]
+# TUI の `e` キーで使うエディタ。未設定なら $EDITOR → vi にフォールバック。
+# command = "code --wait"
+
+[ui]
+# 詳細画面の左ペインで対象行の前後何行を表示するか
+code_context_lines = 5
+
+# 詳細画面が横並びになる端末幅の下限（未満なら縦積み）
+horizontal_threshold = 100
+
+[review]
+# 新規レビューの review_event 既定値（情報用）
+default_event = "COMMENT"
+
+# レビュー時に review-pr skill が読み込む追加のガイドライン。
+# パスは **この config.toml からの相対** で解決される。
+# レイヤー（user / .revu / .revu-local）で連結されるので、
+# 個人ガイドラインを .revu-local/config.toml で追加してもよい。
+guidelines = [
+  "guidelines/coding-style.md",
+]
+
+# severity 定義。コメントアウトすると組み込みの 4 段階
+# (critical / major / minor / nit) が使われる。
+# 1 件でも定義すると組み込みは破棄され、ここに書いた集合だけが有効になる。
+# review-pr skill は `revu severities --json` でこの定義を読み取って
+# コメント生成と review_event 判定に使う。
+
+[[review.severity]]
+name = "🔴 critical"
+level = 100
+description = "本番障害・データ破損・重大セキュリティに直結する"
+review_event = "REQUEST_CHANGES"
+color = "red"
+
+[[review.severity]]
+name = "🟠 high"
+level = 70
+description = "仕様外動作・破壊的変更の見落とし・後方互換の崩れ"
+review_event = "COMMENT"
+color = "yellow"
+
+[[review.severity]]
+name = "🔵 minor"
+level = 40
+description = "改善はするが優先度低、現状でも動く"
+review_event = "APPROVE"
+color = "cyan"
+
+[[review.severity]]
+name = "🟢 nit"
+level = 10
+description = "趣味・スタイルの提案、無視されても困らない"
+review_event = "APPROVE"
+color = "gray"
