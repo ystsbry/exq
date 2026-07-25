@@ -1,0 +1,107 @@
+name: claude-review
+
+# PR の作成・更新時に revu ベースの AI コードレビューを自動実行する。
+# PR コメント `/claude review` でいつでも再実行できる。
+#
+# 役割分担（revu リポジトリの参考実装と同じ）:
+#   - claude-code-action: revu の review-pr スキルを実行し、
+#     ~/.revu/{owner}/{repo}/pr-{N}/ に review.yml + summary.md +
+#     comments/*.md を生成するだけ。GitHub への直接投稿はしない。
+#   - revu submit: 上で生成された下書きを GitHub PR レビューとして投稿。
+#
+# スキップ条件: draft PR / skip-review ラベル / Bot のコメント。
+# 前提: リポジトリシークレット CLAUDE_CODE_OAUTH_TOKEN の登録。
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  id-token: write
+
+# 同一 PR の実行を直列化する。新しい push が来たら進行中のレビューは
+# 中断して最新コミットに対するレビューだけを残す。
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: |
+      (github.event_name == 'pull_request'
+        && github.event.pull_request.draft == false
+        && !contains(github.event.pull_request.labels.*.name, 'skip-review'))
+      || (github.event_name == 'issue_comment'
+        && github.event.issue.pull_request != null
+        && startsWith(github.event.comment.body, '/claude review')
+        && github.event.sender.type != 'Bot')
+    runs-on: ubuntu-latest
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # revu は PUBLIC リポジトリなので追加トークン無しで checkout できる。
+      # review-pr スキルは symlink で ~/.claude/skills に入るため、
+      # このディレクトリはジョブ終了まで残しておくこと。
+      - name: checkout revu (review engine)
+        uses: actions/checkout@v4
+        with:
+          repository: ystsbry/revu
+          path: .revu-src
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: .revu-src/go.mod
+          cache: false
+
+      - name: install revu binary and review-pr skill
+        run: |
+          make -C .revu-src install PREFIX="$HOME/.local"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          make -C .revu-src install-skills
+
+      - name: configure gh auth for revu pr / submit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh auth status
+
+      - name: generate review draft with claude (review-pr skill)
+        uses: anthropics/claude-code-action@v1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            この PR (#${{ env.PR_NUMBER }}, リポジトリ
+            ${{ github.repository }}) を `review-pr` スキルでレビューしてください。
+
+            出力は ~/.revu/${{ github.repository }}/pr-${{ env.PR_NUMBER }}/
+            に review.yml / summary.md / comments/*.md を生成するだけにし、
+            GitHub への投稿（gh pr review 等）は **絶対に行わないでください**。
+            投稿はこのワークフローの後段ステップで `revu submit --yes` が担当します。
+
+            カレントディレクトリは exq リポジトリの checkout です。.revu-src/ は
+            レビューエンジン (revu) の同梱物なのでレビュー対象に含めないでください。
+
+            日本語で出力してください。
+          claude_args: >
+            --allowedTools "Read,Grep,Glob,Edit,Write,Bash(gh:*),Bash(revu:*),Bash(git:*),Bash(mkdir:*),Bash(cp:*),Bash(cat:*)"
+
+      - name: submit review with revu
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          dir="$HOME/.revu/${{ github.repository }}/pr-${PR_NUMBER}"
+          if ! find "$dir" -name review.yml 2>/dev/null | grep -q .; then
+            echo "::error::review draft not found under $dir (claude が下書きを生成していない可能性があります)"
+            exit 1
+          fi
+          revu submit --yes --accept-pending "$dir"

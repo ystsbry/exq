@@ -165,6 +165,17 @@ exq run check   # fmt チェック + vet + test をまとめて実行
 
 exq が未インストールでも `bash .exq/scripts/<name>/run.sh` で直接実行できる。
 
+### AI コードレビュー
+
+PR を作成・更新すると、[revu](https://github.com/ystsbry/revu) ベースの AI コードレビューが
+自動で実行される（`.github/workflows/claude-review.yml`）。
+
+- claude-code-action が revu の `review-pr` スキルでレビュー下書きを生成し、
+  `revu submit` が GitHub PR レビューとして投稿する
+- PR コメントに `/claude review` と書くと任意のタイミングで再実行できる
+- draft PR と `skip-review` ラベル付きの PR はスキップされる
+- 前提: リポジトリシークレット `CLAUDE_CODE_OAUTH_TOKEN` の登録
+
 ### UI の確認（storybook 的な起動）
 
 `exq demo` は一時ディレクトリにサンプルコマンドを展開して TUI を開く。
