@@ -1,0 +1,16 @@
+# dotnet format の結果を環境によらず決定的にするための最小設定。
+root = true
+
+[*.{cs,csproj,sln}]
+indent_style = space
+indent_size = 4
+end_of_line = lf
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+[*.{json,yml,yaml,toml}]
+indent_style = space
+indent_size = 2
+end_of_line = lf
+insert_final_newline = true
