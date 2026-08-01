@@ -107,7 +107,7 @@ func (r *Reporter) send(method string, params map[string]any) {
 	if err != nil {
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	_ = conn.SetDeadline(time.Now().Add(timeout))
 	if _, err := conn.Write(append(payload, '\n')); err != nil {
 		return

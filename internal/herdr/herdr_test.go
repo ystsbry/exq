@@ -28,13 +28,13 @@ func startFakeServer(t *testing.T) (socketPath string, requests <-chan request) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	socketPath = filepath.Join(dir, "herdr.sock")
 	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { ln.Close() })
+	t.Cleanup(func() { _ = ln.Close() })
 	ch := make(chan request, 16)
 	go func() {
 		for {
@@ -43,7 +43,7 @@ func startFakeServer(t *testing.T) (socketPath string, requests <-chan request) 
 				return
 			}
 			go func(c net.Conn) {
-				defer c.Close()
+				defer func() { _ = c.Close() }()
 				line, err := bufio.NewReader(c).ReadBytes('\n')
 				if err != nil {
 					return
@@ -52,7 +52,7 @@ func startFakeServer(t *testing.T) (socketPath string, requests <-chan request) 
 				if json.Unmarshal(line, &req) == nil {
 					ch <- req
 				}
-				c.Write([]byte(`{"id":"` + req.ID + `","result":{}}` + "\n"))
+				_, _ = c.Write([]byte(`{"id":"` + req.ID + `","result":{}}` + "\n"))
 			}(conn)
 		}
 	}()
