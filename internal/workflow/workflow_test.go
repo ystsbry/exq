@@ -90,7 +90,7 @@ func TestRunSequentialSuccess(t *testing.T) {
 	wf := addWorkflow(t, st, "flow", []string{"one", "two"})
 
 	var progress bytes.Buffer
-	res, err := Run(st, wf, st.Root, nil, &progress)
+	res, err := Run(st, wf, st.Root, nil, &progress, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestRunFailFastSkipsRemaining(t *testing.T) {
 	wf := addWorkflow(t, st, "flow", []string{"ok", "bad", "after"})
 
 	var progress bytes.Buffer
-	res, err := Run(st, wf, st.Root, nil, &progress)
+	res, err := Run(st, wf, st.Root, nil, &progress, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestRunPassesArgsToSteps(t *testing.T) {
 		[]string{"argdump ${prefix} literal --p=${prefix}"}, "prefix")
 
 	var progress bytes.Buffer
-	res, err := Run(st, wf, st.Root, []string{"v v"}, &progress)
+	res, err := Run(st, wf, st.Root, []string{"v v"}, &progress, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +255,7 @@ func TestRunMissingValueBecomesEmpty(t *testing.T) {
 	wf := addWorkflow(t, st, "flow", []string{"argdump ${prefix}"}, "prefix")
 
 	var progress bytes.Buffer
-	res, err := Run(st, wf, st.Root, nil, &progress)
+	res, err := Run(st, wf, st.Root, nil, &progress, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +282,7 @@ func TestRunRejectsTooManyValues(t *testing.T) {
 	addScript(t, st, "ok", 0)
 	wf := addWorkflow(t, st, "flow", []string{"ok"})
 	var progress bytes.Buffer
-	if _, err := Run(st, wf, st.Root, []string{"extra"}, &progress); err == nil || !strings.Contains(err.Error(), "at most") {
+	if _, err := Run(st, wf, st.Root, []string{"extra"}, &progress, nil); err == nil || !strings.Contains(err.Error(), "at most") {
 		t.Errorf("expected too-many-values error, got %v", err)
 	}
 }
@@ -296,5 +296,40 @@ func TestResolveRejectsNonWorkflow(t *testing.T) {
 	}
 	if _, err := Resolve(st, c); err == nil {
 		t.Error("expected error for non-workflow")
+	}
+}
+
+func TestRunCallsOnStepPerExecutedStep(t *testing.T) {
+	st := newStore(t)
+	addScript(t, st, "ok", 0)
+	addScript(t, st, "bad", 1)
+	addScript(t, st, "after", 0)
+	wf := addWorkflow(t, st, "flow", []string{"ok", "bad", "after"})
+
+	var progress bytes.Buffer
+	type call struct {
+		current, total int
+		name           string
+	}
+	var calls []call
+	res, err := Run(st, wf, st.Root, nil, &progress, func(current, total int, name string) {
+		calls = append(calls, call{current, total, name})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Failed() == nil {
+		t.Fatal("expected a failed step")
+	}
+	// onStep fires for executed steps only — the step skipped after the
+	// failure must not be announced.
+	want := []call{{1, 3, "ok"}, {2, 3, "bad"}}
+	if len(calls) != len(want) {
+		t.Fatalf("onStep calls = %+v, want %+v", calls, want)
+	}
+	for i, w := range want {
+		if calls[i] != w {
+			t.Errorf("onStep call %d = %+v, want %+v", i, calls[i], w)
+		}
 	}
 }

@@ -131,11 +131,13 @@ func expand(argv []string, vals map[string]string) []string {
 // directory, announcing each step on progress ("[2/4] lint"). values are
 // the workflow's own argument values in [[args]] declaration order (the
 // same convention as scripts); steps receive them via ${key} placeholders.
+// onStep, when non-nil, is called right before each step starts (1-based
+// current, total, step name) so callers can mirror the progress elsewhere.
 // The first failure stops execution and the remaining steps are recorded
 // as skipped. Pre-flight validation failures are returned as an error
 // before any step runs; a failing step is not an error — it is reported
 // in the Result.
-func Run(st *store.Store, wf command.Command, workdir string, values []string, progress io.Writer) (*Result, error) {
+func Run(st *store.Store, wf command.Command, workdir string, values []string, progress io.Writer, onStep func(current, total int, name string)) (*Result, error) {
 	steps, err := Resolve(st, wf)
 	if err != nil {
 		return nil, err
@@ -160,6 +162,9 @@ func Run(st *store.Store, wf command.Command, workdir string, values []string, p
 			continue
 		}
 		fmt.Fprintf(progress, "[%d/%d] %s\n", i+1, len(steps), s.Command.Name)
+		if onStep != nil {
+			onStep(i+1, len(steps), s.Command.Name)
+		}
 		start := time.Now()
 		code, runErr := runner.Run(s.Command, workdir, expand(s.argv, vals))
 		sr := StepResult{Name: s.Command.Name, ExitCode: code, Duration: time.Since(start)}

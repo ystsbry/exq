@@ -6,6 +6,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ystsbry/exq/internal/command"
+	"github.com/ystsbry/exq/internal/herdr"
 )
 
 func newRunCmd() *cobra.Command {
@@ -29,10 +30,11 @@ declared in command.toml.`,
 			if err != nil {
 				return err
 			}
+			rep := herdr.New()
 			if c.Kind == command.KindWorkflow {
-				return executeWorkflow(st, c, values)
+				return executeWorkflow(st, c, values, rep)
 			}
-			return executeScript(st, c, values)
+			return executeScript(st, c, values, rep)
 		},
 	}
 	return cmd
