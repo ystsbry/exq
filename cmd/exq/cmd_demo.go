@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ystsbry/exq/internal/command"
+	"github.com/ystsbry/exq/internal/herdr"
 	"github.com/ystsbry/exq/internal/store"
 	"github.com/ystsbry/exq/internal/tui"
 	"github.com/ystsbry/exq/internal/workflow"
@@ -125,17 +126,21 @@ is rendered to stdout instead — no TTY or key input needed.`,
 				return nil
 			}
 
+			rep := herdr.New()
+			rep.Report(herdr.StateIdle, "", "")
 			res, err := tui.Run(st)
 			if err != nil {
+				rep.Release()
 				return err
 			}
 			if res == nil {
+				rep.Release()
 				return nil
 			}
 			if res.Command.Kind == command.KindWorkflow {
-				return executeWorkflow(st, res.Command, res.Values)
+				return executeWorkflow(st, res.Command, res.Values, rep)
 			}
-			return executeScript(st, res.Command, res.Values)
+			return executeScript(st, res.Command, res.Values, rep)
 		},
 	}
 	cmd.Flags().BoolVar(&empty, "empty", false, "start with no commands (empty state)")

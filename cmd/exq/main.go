@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ystsbry/exq/internal/command"
+	"github.com/ystsbry/exq/internal/herdr"
 	"github.com/ystsbry/exq/internal/runner"
 	"github.com/ystsbry/exq/internal/store"
 	"github.com/ystsbry/exq/internal/tui"
@@ -55,42 +56,53 @@ run it, or delete one with "d".`,
 }
 
 // runTUI shows the command list and executes the picked command after the
-// TUI has released the terminal.
+// TUI has released the terminal. While the TUI is open the pane reports
+// itself to herdr as idle; quitting without running anything releases the
+// agent row so nothing lingers in the sidebar.
 func runTUI() error {
 	st, err := openStore()
 	if err != nil {
 		return err
 	}
+	rep := herdr.New()
+	rep.Report(herdr.StateIdle, "", "")
 	res, err := tui.Run(st)
 	if err != nil {
+		rep.Release()
 		return err
 	}
 	if res == nil {
+		rep.Release()
 		return nil
 	}
 	if res.Command.Kind == command.KindWorkflow {
-		return executeWorkflow(st, res.Command, res.Values)
+		return executeWorkflow(st, res.Command, res.Values, rep)
 	}
-	return executeScript(st, res.Command, res.Values)
+	return executeScript(st, res.Command, res.Values, rep)
 }
 
 // executeScript runs a script with a stderr frame around its raw output
 // (▶ name … ✓/✗ name), so what ran and how it ended is always visible —
 // including after the TUI has restored the terminal. The frame goes to
 // stderr so piping the script's stdout stays clean. A non-zero script
-// exits exq with that code.
-func executeScript(st *store.Store, c command.Command, values []string) error {
+// exits exq with that code. The herdr reporter sees working while the
+// script runs and idle on every exit path — reported explicitly before
+// os.Exit, which would skip a defer.
+func executeScript(st *store.Store, c command.Command, values []string, rep *herdr.Reporter) error {
 	label := c.Name
 	if len(values) > 0 {
 		label += " " + strings.Join(values, " ")
 	}
+	rep.Report(herdr.StateWorking, label, "")
 	fmt.Fprintf(os.Stderr, "▶ %s\n", label)
 	start := time.Now()
 	code, err := runner.Run(c, st.Root, values)
 	if err != nil {
+		rep.Report(herdr.StateIdle, label, "")
 		return err
 	}
 	dur := time.Since(start).Seconds()
+	rep.Report(herdr.StateIdle, label, "")
 	if code != 0 {
 		fmt.Fprintf(os.Stderr, "✗ %s (%.1fs, exit %d)\n", c.Name, dur, code)
 		os.Exit(code)
@@ -102,8 +114,15 @@ func executeScript(st *store.Store, c command.Command, values []string) error {
 // executeWorkflow runs a workflow with progress on stdout and prints the
 // per-step summary. A failing step makes exq exit with that step's exit
 // code; pre-flight validation failures are returned as a plain error.
-func executeWorkflow(st *store.Store, c command.Command, values []string) error {
-	res, err := workflow.Run(st, c, st.Root, values, os.Stdout)
+// The herdr reporter mirrors the run: working with per-step progress in
+// the custom status, then idle on every exit path — reported explicitly
+// before os.Exit, which would skip a defer.
+func executeWorkflow(st *store.Store, c command.Command, values []string, rep *herdr.Reporter) error {
+	rep.Report(herdr.StateWorking, c.Name, "")
+	res, err := workflow.Run(st, c, st.Root, values, os.Stdout, func(current, total int, name string) {
+		rep.Report(herdr.StateWorking, c.Name, fmt.Sprintf("step %d/%d %s", current, total, name))
+	})
+	rep.Report(herdr.StateIdle, c.Name, "")
 	if err != nil {
 		return err
 	}
