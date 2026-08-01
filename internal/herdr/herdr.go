@@ -26,8 +26,9 @@ const (
 // and the agent name shown in the sidebar.
 const source = "exq"
 
-// timeout bounds each socket operation so a wedged herdr server can
-// never stall exq for more than a beat.
+// timeout bounds one whole request — dial, write, and read share a
+// single deadline — so a wedged herdr server can never stall exq for
+// more than a beat.
 const timeout = 500 * time.Millisecond
 
 // Reporter sends state reports to the herdr socket. A nil or disabled
@@ -103,12 +104,14 @@ func (r *Reporter) send(method string, params map[string]any) {
 	if err != nil {
 		return
 	}
-	conn, err := net.DialTimeout("unix", r.socketPath, timeout)
+	deadline := time.Now().Add(timeout)
+	d := net.Dialer{Deadline: deadline}
+	conn, err := d.Dial("unix", r.socketPath)
 	if err != nil {
 		return
 	}
 	defer func() { _ = conn.Close() }()
-	_ = conn.SetDeadline(time.Now().Add(timeout))
+	_ = conn.SetDeadline(deadline)
 	if _, err := conn.Write(append(payload, '\n')); err != nil {
 		return
 	}

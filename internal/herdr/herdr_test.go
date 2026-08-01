@@ -179,6 +179,38 @@ func TestConnectFailureIsSilent(t *testing.T) {
 	rep.Release()
 }
 
+func TestStalledServerBoundsBlockingToOneTimeout(t *testing.T) {
+	// A server that accepts but never replies must not stall a report
+	// beyond the single shared deadline (dial + write + read).
+	dir, err := os.MkdirTemp("", "exq")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socketPath := filepath.Join(dir, "herdr.sock")
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer func() { _ = conn.Close() }() // hold open, never respond
+		}
+	}()
+	setHerdrEnv(t, socketPath)
+
+	start := time.Now()
+	New().Report(StateWorking, "x", "")
+	if elapsed := time.Since(start); elapsed > 3*timeout {
+		t.Errorf("Report blocked for %v, want at most ~%v", elapsed, timeout)
+	}
+}
+
 func TestNilReporterIsSafe(t *testing.T) {
 	var rep *Reporter
 	rep.Report(StateWorking, "x", "")
