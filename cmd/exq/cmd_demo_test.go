@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -80,7 +82,7 @@ func TestNewDemoStoreCleanupRemovesTempDir(t *testing.T) {
 	}
 
 	cleanup()
-	if _, err := os.Stat(st.Root); !os.IsNotExist(err) {
+	if _, err := os.Stat(st.Root); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("cleanup should remove %s: %v", st.Root, err)
 	}
 }
@@ -133,7 +135,7 @@ func TestDemoSnapshotNeedsNoExqDirectory(t *testing.T) {
 	if _, err := run(t, "", "demo", "--snapshot"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, ".exq")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dir, ".exq")); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("demo must not create .exq in the working directory: %v", err)
 	}
 }

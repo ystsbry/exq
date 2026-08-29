@@ -1,6 +1,8 @@
 package store
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -210,7 +212,7 @@ func TestInitMigratesLegacyCommands(t *testing.T) {
 	if len(res.Migrated) != 1 || res.Migrated[0] != "old-cmd" {
 		t.Fatalf("Migrated = %v, want [old-cmd]", res.Migrated)
 	}
-	if _, err := os.Stat(filepath.Join(st.Dir(), "commands")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(st.Dir(), "commands")); !errors.Is(err, fs.ErrNotExist) {
 		t.Error("legacy commands/ should be removed after migration")
 	}
 

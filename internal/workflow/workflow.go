@@ -189,9 +189,7 @@ func Run(st *store.Store, wf command.Command, workdir string, values []string, p
 func Summary(res *Result) string {
 	width := 0
 	for _, s := range res.Steps {
-		if len(s.Name) > width {
-			width = len(s.Name)
-		}
+		width = max(width, len(s.Name))
 	}
 	var b strings.Builder
 	for _, s := range res.Steps {

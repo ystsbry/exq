@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -387,7 +389,7 @@ func TestConfirmDeletePromptAndRemoval(t *testing.T) {
 	if len(out.items) != 1 || out.items[0].Name != "keep" {
 		t.Fatalf("items = %+v, want only keep", out.items)
 	}
-	if _, err := os.Stat(filepath.Join(st.ScriptsDir(), "zap")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(st.ScriptsDir(), "zap")); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("command directory should be gone: %v", err)
 	}
 	// The cursor was on the deleted (last) entry, so it must come back into
@@ -458,7 +460,7 @@ func TestConfirmDeleteShowsReloadError(t *testing.T) {
 	if out.errMsg == "" {
 		t.Error("errMsg is empty, want the reload failure surfaced")
 	}
-	if _, err := os.Stat(filepath.Join(st.ScriptsDir(), "zap")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(st.ScriptsDir(), "zap")); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("the command was still removed, so it should be gone: %v", err)
 	}
 }
@@ -483,6 +485,28 @@ func TestNarrowTerminalCapsCardWidth(t *testing.T) {
 		}
 		if w := lipgloss.Width(line); w > width {
 			t.Errorf("card line width = %d, want <= %d: %q", w, width, line)
+		}
+	}
+}
+
+func TestListBudgetNeverFallsBelowOneCard(t *testing.T) {
+	items := []command.Command{{Name: "a1", Description: "with a meta line"}}
+	m := testModel(t, items)
+	m.errMsg = "something went wrong"
+
+	// visibleEnd relies on a whole card always fitting in the budget. Walk
+	// the terminal heights that could break that, including absurd ones.
+	for _, height := range []int{1, 2, 3, 5, 8, 13, 40} {
+		out := step(t, m, tea.WindowSizeMsg{Width: 80, Height: height})
+		if got := out.listBudget(); got < maxBlockHeight {
+			t.Errorf("listBudget() = %d at height %d, want >= %d", got, height, maxBlockHeight)
+		}
+		if got := out.blockHeight(items[0]); got > maxBlockHeight {
+			t.Errorf("blockHeight() = %d, want <= %d", got, maxBlockHeight)
+		}
+		// The cursor's card is therefore always rendered.
+		if end := out.visibleEnd(out.tabIdxs(), 0, out.listBudget()); end < 1 {
+			t.Errorf("visibleEnd() = %d at height %d, want at least one card", end, height)
 		}
 	}
 }
