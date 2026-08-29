@@ -148,49 +148,55 @@ is rendered to stdout instead — no TTY or key input needed.`,
 // newDemoStore builds a store in a fresh temp directory, populated with
 // sampleCommands unless empty. No git repository is needed: the demo skips
 // Init and creates the directories directly.
-func newDemoStore(empty bool) (*store.Store, func(), error) {
+func newDemoStore(empty bool) (st *store.Store, cleanup func(), err error) {
 	tmp, err := os.MkdirTemp("", "exq-demo-*")
 	if err != nil {
 		return nil, nil, err
 	}
-	cleanup := func() { _ = os.RemoveAll(tmp) }
+	// Anything that fails from here on leaves a half-built fixture, which
+	// is of no use to anyone — take the whole temp directory with it.
+	defer func() {
+		if err != nil {
+			_ = os.RemoveAll(tmp)
+		}
+	}()
 
-	st, err := store.Open(tmp)
+	st, err = store.Open(tmp)
 	if err != nil {
-		cleanup()
 		return nil, nil, err
 	}
-	if err := os.MkdirAll(st.ScriptsDir(), 0o755); err != nil {
-		cleanup()
+	if err = os.MkdirAll(st.ScriptsDir(), 0o755); err != nil {
 		return nil, nil, err
 	}
 	if !empty {
 		for _, s := range sampleCommands {
-			dir := filepath.Join(st.ScriptsDir(), s.name)
-			if err := os.MkdirAll(dir, 0o755); err != nil {
-				cleanup()
-				return nil, nil, err
-			}
-			if err := os.WriteFile(filepath.Join(dir, command.MetaFile), []byte(s.meta), 0o644); err != nil {
-				cleanup()
-				return nil, nil, err
-			}
-			if err := os.WriteFile(filepath.Join(dir, command.RunFile), []byte(s.script), 0o755); err != nil {
-				cleanup()
+			if err = writeScriptFixture(filepath.Join(st.ScriptsDir(), s.name), s.meta, s.script); err != nil {
 				return nil, nil, err
 			}
 		}
 		for _, w := range sampleWorkflows {
-			dir := filepath.Join(st.WorkflowsDir(), w.name)
-			if err := os.MkdirAll(dir, 0o755); err != nil {
-				cleanup()
-				return nil, nil, err
-			}
-			if err := os.WriteFile(filepath.Join(dir, command.MetaFile), []byte(w.meta), 0o644); err != nil {
-				cleanup()
+			if err = writeWorkflowFixture(filepath.Join(st.WorkflowsDir(), w.name), w.meta); err != nil {
 				return nil, nil, err
 			}
 		}
 	}
-	return st, cleanup, nil
+	return st, func() { _ = os.RemoveAll(tmp) }, nil
+}
+
+// writeScriptFixture creates one demo script: its metadata plus a runnable
+// entrypoint.
+func writeScriptFixture(dir, meta, script string) error {
+	if err := writeWorkflowFixture(dir, meta); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, command.RunFile), []byte(script), 0o755)
+}
+
+// writeWorkflowFixture creates one demo workflow, which is metadata only —
+// a workflow composes scripts instead of having an entrypoint of its own.
+func writeWorkflowFixture(dir, meta string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, command.MetaFile), []byte(meta), 0o644)
 }

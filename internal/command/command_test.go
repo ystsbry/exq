@@ -81,6 +81,86 @@ func TestLoadMissingMetaTolerated(t *testing.T) {
 	}
 }
 
+func TestKindString(t *testing.T) {
+	// The label doubles as the .exq subdirectory name, so what the user
+	// reads in the UI is what they find on disk.
+	if got := KindScript.String(); got != "scripts" {
+		t.Errorf("KindScript.String() = %q, want %q", got, "scripts")
+	}
+	if got := KindWorkflow.String(); got != "workflows" {
+		t.Errorf("KindWorkflow.String() = %q, want %q", got, "workflows")
+	}
+}
+
+func TestMeta(t *testing.T) {
+	tests := []struct {
+		name string
+		cmd  Command
+		want string
+	}{
+		{
+			name: "nothing to describe",
+			cmd:  Command{Name: "bare"},
+			want: "",
+		},
+		{
+			name: "description only",
+			cmd:  Command{Name: "build", Description: "build the binary"},
+			want: "build the binary",
+		},
+		{
+			name: "args appended to description",
+			cmd: Command{
+				Name:        "deploy",
+				Description: "deploy it",
+				Args:        []Arg{{Key: "env"}, {Key: "service"}},
+			},
+			want: "deploy it (args: env, service)",
+		},
+		{
+			name: "args without description",
+			cmd:  Command{Name: "deploy", Args: []Arg{{Key: "env"}}},
+			want: "(args: env)",
+		},
+		{
+			name: "workflow steps take precedence over args",
+			cmd: Command{
+				Name:        "release",
+				Description: "cut a release",
+				Kind:        KindWorkflow,
+				Steps:       []string{"build", "publish"},
+				Args:        []Arg{{Key: "version"}},
+			},
+			want: "cut a release (steps: build → publish)",
+		},
+		{
+			name: "workflow without steps falls back to args",
+			cmd: Command{
+				Name: "broken",
+				Kind: KindWorkflow,
+				Args: []Arg{{Key: "env"}},
+			},
+			want: "(args: env)",
+		},
+		{
+			name: "steps on a script are ignored",
+			cmd: Command{
+				Name:        "odd",
+				Description: "a script that declares steps",
+				Steps:       []string{"a", "b"},
+			},
+			want: "a script that declares steps",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.cmd.Meta(); got != tt.want {
+				t.Errorf("Meta() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRunPath(t *testing.T) {
 	c := Load(filepath.Join(t.TempDir(), "deploy"))
 	if got, want := c.RunPath(), filepath.Join(c.Dir, RunFile); got != want {

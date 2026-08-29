@@ -2,11 +2,8 @@ package main
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/spf13/cobra"
-
-	"github.com/ystsbry/exq/internal/command"
 )
 
 func newListCmd() *cobra.Command {
@@ -42,23 +39,9 @@ func newListCmd() *cobra.Command {
 					if i > 0 {
 						fmt.Fprintln(out)
 					}
-					label := "scripts"
-					if c.Kind == command.KindWorkflow {
-						label = "workflows"
-					}
-					fmt.Fprintf(out, "%s:\n", label)
+					fmt.Fprintf(out, "%s:\n", c.Kind)
 				}
-				meta := c.Description
-				if c.Kind == command.KindWorkflow && len(c.Steps) > 0 {
-					meta = strings.TrimSpace(meta + " (steps: " + strings.Join(c.Steps, " → ") + ")")
-				} else if len(c.Args) > 0 {
-					keys := make([]string, len(c.Args))
-					for i, a := range c.Args {
-						keys[i] = a.Key
-					}
-					meta = strings.TrimSpace(meta + " (args: " + strings.Join(keys, ", ") + ")")
-				}
-				fmt.Fprintf(out, "  %-*s  %s\n", width, c.Name, meta)
+				fmt.Fprintf(out, "  %-*s  %s\n", width, c.Name, c.Meta())
 			}
 			return nil
 		},

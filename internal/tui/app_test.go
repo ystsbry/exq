@@ -338,66 +338,6 @@ func TestArgsFormFocusWrapsBothWays(t *testing.T) {
 	}
 }
 
-func TestDescribeItem(t *testing.T) {
-	tests := []struct {
-		name string
-		item command.Command
-		want string
-	}{
-		{
-			name: "nothing to describe",
-			item: command.Command{Name: "bare"},
-			want: "",
-		},
-		{
-			name: "description only",
-			item: command.Command{Name: "build", Description: "build the binary"},
-			want: "build the binary",
-		},
-		{
-			name: "args appended to description",
-			item: command.Command{
-				Name:        "deploy",
-				Description: "deploy it",
-				Args:        []command.Arg{{Key: "env"}, {Key: "service"}},
-			},
-			want: "deploy it (args: env, service)",
-		},
-		{
-			name: "args without description",
-			item: command.Command{Name: "deploy", Args: []command.Arg{{Key: "env"}}},
-			want: "(args: env)",
-		},
-		{
-			name: "workflow steps take precedence over args",
-			item: command.Command{
-				Name:        "release",
-				Description: "cut a release",
-				Kind:        command.KindWorkflow,
-				Steps:       []string{"build", "publish"},
-				Args:        []command.Arg{{Key: "version"}},
-			},
-			want: "cut a release (steps: build → publish)",
-		},
-		{
-			name: "workflow without steps falls back to args",
-			item: command.Command{
-				Name: "broken",
-				Kind: command.KindWorkflow,
-				Args: []command.Arg{{Key: "env"}},
-			},
-			want: "(args: env)",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := describeItem(tt.item); got != tt.want {
-				t.Errorf("describeItem() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 // storeWithScripts creates a store whose scripts/ holds one runnable entry
 // per name, and returns it together with the discovered items.
 func storeWithScripts(t *testing.T, names ...string) (*store.Store, []command.Command) {
