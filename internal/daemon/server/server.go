@@ -149,7 +149,14 @@ func (s *Server) dispatch(req daemon.Request) daemon.Response {
 		if err != nil {
 			return daemon.Response{Error: err.Error()}
 		}
-		s.log.Info("job submitted", "job", info.ID, "name", info.Spec.Name, "workdir", info.Spec.Workdir)
+		if info.State == daemon.JobSkipped {
+			// journald is where a schedule's operator looks when a run
+			// seems to have gone missing.
+			s.log.Info("job skipped", "job", info.ID, "name", info.Spec.Name,
+				"schedule", info.Spec.ScheduleID, "reason", info.Reason)
+		} else {
+			s.log.Info("job submitted", "job", info.ID, "name", info.Spec.Name, "workdir", info.Spec.Workdir)
+		}
 		return daemon.Response{OK: true, Job: info}
 	case daemon.OpJobList:
 		jobs, err := s.jobs.List()

@@ -511,3 +511,103 @@ func TestStoppingAWorkflowJobSkipsTheRemainingSteps(t *testing.T) {
 		t.Fatalf("log %q shows a step started after the stop", log)
 	}
 }
+
+// waitRunning polls until the job is actually running, so an overlap
+// test races against a real occupied schedule rather than a queued one.
+func waitRunning(t *testing.T, j *Jobs, id string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if info, err := j.Status(id); err == nil && info.State == daemon.JobRunning {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("job %s never reached running", id)
+}
+
+func TestSubmitSkipsAnOverlappingScheduleRun(t *testing.T) {
+	root := newProject(t, map[string]string{"slow": "#!/bin/sh\nsleep 60\n"})
+	j := newJobs(t)
+	spec := daemon.JobSpec{ProjectDir: root, Workdir: root, Name: "slow", ScheduleID: "proj-slow"}
+
+	first, err := j.Submit(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitRunning(t, j, first.ID)
+
+	second, err := j.Submit(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.State != daemon.JobSkipped {
+		t.Fatalf("second submit = %q, want skipped", second.State)
+	}
+	if !strings.Contains(second.Reason, first.ID) {
+		t.Fatalf("reason %q does not name the job that blocked it", second.Reason)
+	}
+	if !second.State.Done() {
+		t.Fatal("a skipped job must be terminal")
+	}
+	// The skip has to be visible where the runs are, not only in the
+	// daemon's log.
+	jobs, err := j.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 2 {
+		t.Fatalf("listed %d jobs, want the run and the skip", len(jobs))
+	}
+	if log := j.logOf(t, second.ID); !strings.Contains(log, "skipped") {
+		t.Fatalf("log %q does not explain the skip", log)
+	}
+
+	// Once the schedule is free again, the next firing runs.
+	if _, err := j.Stop(first.ID); err != nil {
+		t.Fatal(err)
+	}
+	third, err := j.Submit(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third.State == daemon.JobSkipped {
+		t.Fatal("submit skipped although the schedule was free")
+	}
+	if _, err := j.Stop(third.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSubmitDoesNotSkipAcrossDifferentSchedules(t *testing.T) {
+	root := newProject(t, map[string]string{"slow": "#!/bin/sh\nsleep 60\n"})
+	j := newJobs(t)
+	base := daemon.JobSpec{ProjectDir: root, Workdir: root, Name: "slow"}
+
+	first := base
+	first.ScheduleID = "proj-a"
+	a, err := j.Submit(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitRunning(t, j, a.ID)
+
+	second := base
+	second.ScheduleID = "proj-b"
+	b, err := j.Submit(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.State == daemon.JobSkipped {
+		t.Fatal("a different schedule must not be blocked")
+	}
+	// A manual submit carries no schedule id and is never held back.
+	manual, err := j.Submit(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manual.State == daemon.JobSkipped {
+		t.Fatal("a manual submit must never be skipped")
+	}
+	j.StopAll()
+}

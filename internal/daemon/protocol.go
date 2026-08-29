@@ -59,14 +59,17 @@ type JobSpec struct {
 	Workdir    string   `json:"workdir"`
 	Name       string   `json:"name"`
 	Args       []string `json:"args,omitempty"`
-	// ScheduleID marks a submit coming from a systemd schedule timer;
-	// exqd uses it to skip overlapping runs of the same schedule.
+	// ScheduleID marks a submit coming from a systemd schedule timer.
+	// exqd skips a submit whose schedule still has a job running, so a
+	// slow run is never overtaken by the next firing (overlap: skip).
 	ScheduleID string `json:"schedule_id,omitempty"`
 }
 
 // JobState is the lifecycle of one job. A stop request moves a running
 // job to stopped; failed covers both non-zero exits and jobs that never
-// started (missing workdir, unrunnable command, daemon restart).
+// started (missing workdir, unrunnable command, daemon restart); skipped
+// is a scheduled run that was dropped because the previous run of the
+// same schedule had not finished yet.
 type JobState string
 
 const (
@@ -75,11 +78,12 @@ const (
 	JobSucceeded JobState = "succeeded"
 	JobFailed    JobState = "failed"
 	JobStopped   JobState = "stopped"
+	JobSkipped   JobState = "skipped"
 )
 
 // Done reports whether the state is terminal.
 func (s JobState) Done() bool {
-	return s == JobSucceeded || s == JobFailed || s == JobStopped
+	return s == JobSucceeded || s == JobFailed || s == JobStopped || s == JobSkipped
 }
 
 // JobInfo is the daemon's record of one job, as persisted in job.json

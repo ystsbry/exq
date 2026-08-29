@@ -275,3 +275,39 @@ func TestJobCommandsExplainAMissingDaemon(t *testing.T) {
 		})
 	}
 }
+
+func TestRunBackgroundReportsASkippedScheduleRun(t *testing.T) {
+	startDaemon(t)
+	st := newStore(t)
+	addScript(t, st, "slow", "", "#!/bin/sh\nsleep 60\n")
+
+	first, err := run(t, "", "run", "slow", "--bg", "--schedule-id", "proj-slow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := submittedID(t, first)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		info, err := daemon.ReadJobRecord(id)
+		if err == nil && info.State == daemon.JobRunning {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("job never started")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// The timer's oneshot service must exit cleanly on a skip, or every
+	// overlapping firing would show up as a failed unit.
+	out, err := run(t, "", "run", "slow", "--bg", "--schedule-id", "proj-slow")
+	if err != nil {
+		t.Fatalf("a skipped submit must not fail: %v", err)
+	}
+	if !strings.Contains(out, "not started") || !strings.Contains(out, id) {
+		t.Fatalf("skip output = %q, want it to name the job still running", out)
+	}
+	if _, err := run(t, "", "stop", id); err != nil {
+		t.Fatal(err)
+	}
+}

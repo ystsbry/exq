@@ -47,10 +47,12 @@ type Jobs struct {
 }
 
 // handle is the daemon's grip on one running job: the cancel that stops
-// it and a channel closed once its goroutine is done.
+// it, a channel closed once its goroutine is done, and the schedule it
+// came from — which is what an overlapping submit is checked against.
 type handle struct {
-	cancel context.CancelFunc
-	done   chan struct{}
+	scheduleID string
+	cancel     context.CancelFunc
+	done       chan struct{}
 }
 
 // NewJobs opens (creating if needed) the job directory at dir. The
@@ -79,6 +81,12 @@ func newID(t time.Time) string {
 // Submit records a new job and starts running it. It returns as soon as
 // the record exists — execution continues in the background — so the
 // caller gets a job id immediately.
+//
+// A submit carrying a schedule id whose previous run is still going is
+// recorded as skipped instead of started (overlap: skip). The check
+// lives here rather than in the timer units because a schedule and a
+// manual submit compete for the same job engine, and one rule covering
+// both is easier to reason about than two.
 func (j *Jobs) Submit(spec daemon.JobSpec) (*daemon.JobInfo, error) {
 	if err := validateSpec(spec); err != nil {
 		return nil, err
@@ -98,14 +106,54 @@ func (j *Jobs) Submit(spec daemon.JobSpec) (*daemon.JobInfo, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	h := &handle{cancel: cancel, done: make(chan struct{})}
+	h := &handle{scheduleID: spec.ScheduleID, cancel: cancel, done: make(chan struct{})}
+
+	// Claiming the schedule and registering the job have to happen under
+	// one lock, or two firings arriving together would both see a free
+	// schedule and both start.
 	j.mu.Lock()
-	j.running[info.ID] = h
+	blocker := j.scheduleHolder(spec.ScheduleID)
+	if blocker == "" {
+		j.running[info.ID] = h
+	}
 	j.mu.Unlock()
 
+	if blocker != "" {
+		cancel()
+		j.skip(info, blocker)
+		return info, nil
+	}
 	j.wg.Add(1)
 	go j.execute(ctx, h, *info)
 	return info, nil
+}
+
+// scheduleHolder returns the id of the running job occupying a schedule,
+// or "" when the schedule is free. Callers must hold j.mu; an empty
+// scheduleID never holds anything, so manual submits never block or get
+// blocked.
+func (j *Jobs) scheduleHolder(scheduleID string) string {
+	if scheduleID == "" {
+		return ""
+	}
+	for id, h := range j.running {
+		if h.scheduleID == scheduleID {
+			return id
+		}
+	}
+	return ""
+}
+
+// skip records a submit that was dropped because its schedule was busy.
+// It becomes a normal terminal job record so `exq jobs` shows the skip
+// alongside the runs it was skipped for.
+func (j *Jobs) skip(info *daemon.JobInfo, blocker string) {
+	reason := fmt.Sprintf("skipped: schedule %s is still running as job %s", info.Spec.ScheduleID, blocker)
+	if f, err := os.OpenFile(j.logPath(info.ID), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+		fmt.Fprintf(f, "exq: %s\n", reason)
+		_ = f.Close()
+	}
+	j.finish(info, daemon.JobSkipped, 0, reason)
 }
 
 // validateSpec rejects a job that could never run, so the failure lands
