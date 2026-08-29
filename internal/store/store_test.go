@@ -285,6 +285,184 @@ func TestListDiscoversWorkflowsAndKinds(t *testing.T) {
 	}
 }
 
+func TestInitAppendsToExcludeWithoutTrailingNewline(t *testing.T) {
+	repo := newRepo(t)
+	st, _ := Open(repo)
+	excludePath := filepath.Join(repo, ".git", "info", "exclude")
+	if err := os.WriteFile(excludePath, []byte("*.log"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := st.Init(); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(excludePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The new entry must start on its own line, not glued onto "*.log".
+	if got, want := string(data), "*.log\n.exq/\n"; got != want {
+		t.Errorf("exclude file = %q, want %q", got, want)
+	}
+}
+
+func TestInitCreatesExcludeFileWhenMissing(t *testing.T) {
+	repo := newRepo(t)
+	st, _ := Open(repo)
+	excludePath := filepath.Join(repo, ".git", "info", "exclude")
+	if err := os.RemoveAll(filepath.Dir(excludePath)); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := st.Init()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.UpdatedExclude {
+		t.Error("expected UpdatedExclude=true when the exclude file did not exist")
+	}
+	data, err := os.ReadFile(excludePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(data), ".exq/\n"; got != want {
+		t.Errorf("exclude file = %q, want %q", got, want)
+	}
+}
+
+func TestInitFailsOnMigrationNameCollision(t *testing.T) {
+	repo := newRepo(t)
+	st, _ := Open(repo)
+	// The same name exists in both the legacy and the new layout, so the
+	// migration cannot decide which one wins.
+	addEntry(t, filepath.Join(st.Dir(), "commands"), "build", "legacy")
+	addEntry(t, st.ScriptsDir(), "build", "current")
+
+	_, err := st.Init()
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("Init() = %v, want a collision error", err)
+	}
+	// Nothing was moved, so the legacy entry is still there to fix by hand.
+	if _, err := os.Stat(filepath.Join(st.Dir(), "commands", "build")); err != nil {
+		t.Errorf("legacy entry should survive a failed migration: %v", err)
+	}
+}
+
+func TestListIgnoresFilesAmongCommandDirs(t *testing.T) {
+	repo := newRepo(t)
+	st, _ := Open(repo)
+	if _, err := st.Init(); err != nil {
+		t.Fatal(err)
+	}
+	addCommand(t, st, "real", "a script")
+	if err := os.WriteFile(filepath.Join(st.ScriptsDir(), "README.md"), []byte("notes\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmds, err := st.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cmds) != 1 || cmds[0].Name != "real" {
+		t.Errorf("stray files should not be listed as commands: %+v", cmds)
+	}
+}
+
+func TestInitFailsWhenExcludePathIsNotAFile(t *testing.T) {
+	repo := newRepo(t)
+	st, _ := Open(repo)
+	excludePath := filepath.Join(repo, ".git", "info", "exclude")
+	if err := os.Remove(excludePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(excludePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// A read error other than "not exist" must surface rather than being
+	// mistaken for an empty exclude file.
+	if _, err := st.Init(); err == nil {
+		t.Error("Init() = nil, want an error when the exclude path is a directory")
+	}
+}
+
+func TestListFailsWhenScriptsDirIsNotADirectory(t *testing.T) {
+	repo := newRepo(t)
+	st, _ := Open(repo)
+	if err := os.MkdirAll(st.Dir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(st.ScriptsDir(), []byte("not a directory\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Only a missing directory is benign; anything else is a real problem
+	// the user needs to see.
+	if _, err := st.List(); err == nil {
+		t.Error("List() = nil, want an error when scripts/ is a regular file")
+	}
+}
+
+func TestGetRejectsInvalidNames(t *testing.T) {
+	repo := newRepo(t)
+	st, _ := Open(repo)
+	if _, err := st.Init(); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"", ".", "..", "../evil", "a/b"} {
+		if _, err := st.Get(name); err == nil {
+			t.Errorf("Get(%q) should fail", name)
+		}
+	}
+}
+
+func TestGetMissingCommandNamesBothDirs(t *testing.T) {
+	repo := newRepo(t)
+	st, _ := Open(repo)
+	if _, err := st.Init(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := st.Get("nope")
+	if err == nil {
+		t.Fatal("Get() on a missing command should fail")
+	}
+	// The message tells the user where exq actually looked.
+	for _, dir := range []string{st.ScriptsDir(), st.WorkflowsDir()} {
+		if !strings.Contains(err.Error(), dir) {
+			t.Errorf("error %v should mention %s", err, dir)
+		}
+	}
+}
+
+func TestExists(t *testing.T) {
+	repo := newRepo(t)
+	st, _ := Open(repo)
+	if st.Exists() {
+		t.Error("Exists() = true before init")
+	}
+	if _, err := st.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if !st.Exists() {
+		t.Error("Exists() = false after init")
+	}
+}
+
+func TestOpenResolvesRelativePathToAbsolute(t *testing.T) {
+	repo := newRepo(t)
+	t.Chdir(repo)
+
+	st, err := Open(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(st.Root) {
+		t.Errorf("Root = %q, want an absolute path", st.Root)
+	}
+}
+
 func TestDuplicateNameAcrossKindsFails(t *testing.T) {
 	repo := newRepo(t)
 	st, _ := Open(repo)

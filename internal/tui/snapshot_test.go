@@ -54,3 +54,47 @@ func TestSnapshotsRenderAllStates(t *testing.T) {
 		t.Errorf("error snapshot should show the error:\n%s", byName["error"])
 	}
 }
+
+func TestSnapshotsWithoutItemsFallBackToFixtures(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// `exq demo --snapshot --empty` has no commands to render, so every
+	// item-dependent state has to stand on built-in fixtures.
+	byName := map[string]string{}
+	for _, s := range Snapshots(st, nil) {
+		if s.View == "" {
+			t.Errorf("snapshot %q rendered empty", s.Name)
+		}
+		byName[s.Name] = s.View
+	}
+	if !strings.Contains(byName["browse"], "sample-command") {
+		t.Errorf("browse snapshot should use the built-in fixture:\n%s", byName["browse"])
+	}
+	if !strings.Contains(byName["args-form"], "env") {
+		t.Errorf("args-form snapshot should use the argful fixture:\n%s", byName["args-form"])
+	}
+}
+
+func TestSnapshotsUseAnItemThatDeclaresArgs(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := []command.Command{
+		{Name: "plain", Description: "no arguments"},
+		{Name: "deploy", Args: []command.Arg{{Key: "target", Description: "where to deploy"}}},
+	}
+
+	byName := map[string]string{}
+	for _, s := range Snapshots(st, items) {
+		byName[s.Name] = s.View
+	}
+	// The form snapshot picks the first argful command rather than the
+	// built-in fixture.
+	if !strings.Contains(byName["args-form"], "target") {
+		t.Errorf("args-form snapshot should use the real argful command:\n%s", byName["args-form"])
+	}
+}
