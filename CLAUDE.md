@@ -15,3 +15,5 @@
 ## ルール一覧
 
 - `.claude/rules/skills.md`: スキルの配置規約（ユーザー配布物と開発者専用の使い分け・SKILL.md の書式）
+- `.claude/rules/branch-naming.md`: ブランチ命名規約（`<type>/<kebab-case>` 形式）
+- `.claude/rules/commit-message.md`: コミットメッセージ規約（Conventional Commits・日本語）
