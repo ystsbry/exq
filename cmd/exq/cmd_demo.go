@@ -170,12 +170,12 @@ func newDemoStore(empty bool) (st *store.Store, cleanup func(), err error) {
 	}
 	if !empty {
 		for _, s := range sampleCommands {
-			if err = writeFixture(filepath.Join(st.ScriptsDir(), s.name), s.meta, s.script); err != nil {
+			if err = writeScriptFixture(filepath.Join(st.ScriptsDir(), s.name), s.meta, s.script); err != nil {
 				return nil, nil, err
 			}
 		}
 		for _, w := range sampleWorkflows {
-			if err = writeFixture(filepath.Join(st.WorkflowsDir(), w.name), w.meta, ""); err != nil {
+			if err = writeWorkflowFixture(filepath.Join(st.WorkflowsDir(), w.name), w.meta); err != nil {
 				return nil, nil, err
 			}
 		}
@@ -183,18 +183,20 @@ func newDemoStore(empty bool) (st *store.Store, cleanup func(), err error) {
 	return st, func() { _ = os.RemoveAll(tmp) }, nil
 }
 
-// writeFixture creates one demo command directory. An empty script marks a
-// workflow, which composes scripts instead of having an entrypoint of its
-// own.
-func writeFixture(dir, meta, script string) error {
+// writeScriptFixture creates one demo script: its metadata plus a runnable
+// entrypoint.
+func writeScriptFixture(dir, meta, script string) error {
+	if err := writeWorkflowFixture(dir, meta); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, command.RunFile), []byte(script), 0o755)
+}
+
+// writeWorkflowFixture creates one demo workflow, which is metadata only —
+// a workflow composes scripts instead of having an entrypoint of its own.
+func writeWorkflowFixture(dir, meta string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, command.MetaFile), []byte(meta), 0o644); err != nil {
-		return err
-	}
-	if script == "" {
-		return nil
-	}
-	return os.WriteFile(filepath.Join(dir, command.RunFile), []byte(script), 0o755)
+	return os.WriteFile(filepath.Join(dir, command.MetaFile), []byte(meta), 0o644)
 }
