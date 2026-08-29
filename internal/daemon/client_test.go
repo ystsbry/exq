@@ -250,6 +250,40 @@ func TestStalledServerBoundsBlockingToOneTimeout(t *testing.T) {
 	}
 }
 
+func TestPartialResponseSurfacesReadError(t *testing.T) {
+	// A daemon that dies mid-response leaves truncated JSON behind; the
+	// error must report the transport failure, not the JSON noise.
+	dir, err := os.MkdirTemp("", "exq")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socketPath := filepath.Join(dir, "exqd.sock")
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer func() { _ = c.Close() }()
+				_, _ = bufio.NewReader(c).ReadBytes('\n')
+				_, _ = c.Write([]byte(`{"version":1,"ok":`)) // truncated, no newline
+			}(conn)
+		}
+	}()
+
+	err = NewClient(socketPath).Ping()
+	if err == nil || !strings.Contains(err.Error(), "exqd: read:") {
+		t.Errorf("err = %v, want the read error surfaced", err)
+	}
+}
+
 func TestSocketPathPrefersXDGRuntimeDir(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", "/run/user/1000")
 	if got, want := SocketPath(), filepath.Join("/run/user/1000", "exq", "exqd.sock"); got != want {
@@ -262,5 +296,17 @@ func TestSocketPathFallsBackToHome(t *testing.T) {
 	t.Setenv("HOME", "/home/someone")
 	if got, want := SocketPath(), filepath.Join("/home/someone", ".exq-daemon", "exqd.sock"); got != want {
 		t.Errorf("SocketPath() = %q, want %q", got, want)
+	}
+}
+
+func TestSocketPathLastResortIsAbsolute(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	t.Setenv("HOME", "") // makes os.UserHomeDir fail on unix
+	got := SocketPath()
+	if want := filepath.Join(os.TempDir(), "exq-daemon", "exqd.sock"); got != want {
+		t.Errorf("SocketPath() = %q, want %q", got, want)
+	}
+	if !filepath.IsAbs(got) {
+		t.Errorf("SocketPath() = %q, want an absolute path", got)
 	}
 }

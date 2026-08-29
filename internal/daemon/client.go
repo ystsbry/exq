@@ -35,7 +35,10 @@ func SocketPath() string {
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(".exq-daemon", "exqd.sock")
+		// Last resort must stay an absolute path: exq runs from varying
+		// directories, and a cwd-relative socket path would point somewhere
+		// different on every invocation.
+		return filepath.Join(os.TempDir(), "exq-daemon", "exqd.sock")
 	}
 	return filepath.Join(home, ".exq-daemon", "exqd.sock")
 }
@@ -127,12 +130,17 @@ func (c *Client) roundTrip(req Request) (*Response, error) {
 	}
 	// A daemon that closes without a trailing newline still gets its
 	// partial line decoded; only an empty read is a transport error.
-	line, err := bufio.NewReader(conn).ReadBytes('\n')
-	if err != nil && len(line) == 0 {
-		return nil, fmt.Errorf("exqd: read: %w", err)
+	line, readErr := bufio.NewReader(conn).ReadBytes('\n')
+	if readErr != nil && len(line) == 0 {
+		return nil, fmt.Errorf("exqd: read: %w", readErr)
 	}
 	var resp Response
 	if err := json.Unmarshal(line, &resp); err != nil {
+		// A truncated read rarely decodes; report the transport failure
+		// (timeout, reset) rather than the JSON noise it produced.
+		if readErr != nil {
+			return nil, fmt.Errorf("exqd: read: %w", readErr)
+		}
 		return nil, fmt.Errorf("exqd: malformed response: %w", err)
 	}
 	if resp.Version != ProtocolVersion {
