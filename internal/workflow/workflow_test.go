@@ -2,14 +2,18 @@ package workflow
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/ystsbry/exq/internal/command"
+	"github.com/ystsbry/exq/internal/runner"
 	"github.com/ystsbry/exq/internal/store"
 )
 
@@ -44,6 +48,22 @@ func addScript(t *testing.T, st *store.Store, name string, exitCode int) {
 	}
 	script := "#!/bin/sh\necho " + name + " >> order.txt\nexit " + strconv.Itoa(exitCode) + "\n"
 	if err := os.WriteFile(filepath.Join(dir, command.RunFile), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// addScriptBody writes a script with an arbitrary run.sh body, for the
+// cases the order.txt convention of addScript cannot express.
+func addScriptBody(t *testing.T, st *store.Store, name, body string) {
+	t.Helper()
+	dir := filepath.Join(st.ScriptsDir(), name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, command.MetaFile), []byte("description = \""+name+"\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, command.RunFile), []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -87,7 +107,7 @@ func TestRunSequentialSuccess(t *testing.T) {
 	wf := addWorkflow(t, st, "flow", []string{"one", "two"})
 
 	var progress bytes.Buffer
-	res, err := Run(st, wf, st.Root, nil, &progress, nil)
+	res, err := Run(t.Context(), st, wf, Options{Workdir: st.Root, Progress: &progress})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +145,7 @@ func TestRunFailFastSkipsRemaining(t *testing.T) {
 	wf := addWorkflow(t, st, "flow", []string{"ok", "bad", "after"})
 
 	var progress bytes.Buffer
-	res, err := Run(st, wf, st.Root, nil, &progress, nil)
+	res, err := Run(t.Context(), st, wf, Options{Workdir: st.Root, Progress: &progress})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +232,7 @@ func TestRunRecordsStepThatCannotStart(t *testing.T) {
 	addScript(t, st, "after", 0)
 	wf := addWorkflow(t, st, "flow", []string{"not-a-program", "after"})
 
-	res, err := Run(st, wf, t.TempDir(), nil, &bytes.Buffer{}, nil)
+	res, err := Run(t.Context(), st, wf, Options{Workdir: t.TempDir(), Progress: &bytes.Buffer{}})
 	// A step that cannot start is a step failure, not a workflow error.
 	if err != nil {
 		t.Fatalf("Run() err = %v, want nil", err)
@@ -281,7 +301,7 @@ func TestRunPassesArgsToSteps(t *testing.T) {
 		[]string{"argdump ${prefix} literal --p=${prefix}"}, "prefix")
 
 	var progress bytes.Buffer
-	res, err := Run(st, wf, st.Root, []string{"v v"}, &progress, nil)
+	res, err := Run(t.Context(), st, wf, Options{Workdir: st.Root, Values: []string{"v v"}, Progress: &progress})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +326,7 @@ func TestRunMissingValueBecomesEmpty(t *testing.T) {
 	wf := addWorkflow(t, st, "flow", []string{"argdump ${prefix}"}, "prefix")
 
 	var progress bytes.Buffer
-	res, err := Run(st, wf, st.Root, nil, &progress, nil)
+	res, err := Run(t.Context(), st, wf, Options{Workdir: st.Root, Progress: &progress})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +353,7 @@ func TestRunRejectsTooManyValues(t *testing.T) {
 	addScript(t, st, "ok", 0)
 	wf := addWorkflow(t, st, "flow", []string{"ok"})
 	var progress bytes.Buffer
-	if _, err := Run(st, wf, st.Root, []string{"extra"}, &progress, nil); err == nil || !strings.Contains(err.Error(), "at most") {
+	if _, err := Run(t.Context(), st, wf, Options{Workdir: st.Root, Values: []string{"extra"}, Progress: &progress}); err == nil || !strings.Contains(err.Error(), "at most") {
 		t.Errorf("expected too-many-values error, got %v", err)
 	}
 }
@@ -363,9 +383,9 @@ func TestRunCallsOnStepPerExecutedStep(t *testing.T) {
 		name           string
 	}
 	var calls []call
-	res, err := Run(st, wf, st.Root, nil, &progress, func(current, total int, name string) {
+	res, err := Run(t.Context(), st, wf, Options{Workdir: st.Root, Progress: &progress, OnStep: func(current, total int, name string) {
 		calls = append(calls, call{current, total, name})
-	})
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,4 +403,124 @@ func TestRunCallsOnStepPerExecutedStep(t *testing.T) {
 			t.Errorf("onStep call %d = %+v, want %+v", i, calls[i], w)
 		}
 	}
+}
+
+func TestRunRoutesStepOutputToTheGivenWriters(t *testing.T) {
+	st := newStore(t)
+	addScriptBody(t, st, "talker", "#!/bin/sh\necho to-stdout\necho to-stderr >&2\n")
+	wf := addWorkflow(t, st, "flow", []string{"talker"})
+
+	var progress, out, errOut bytes.Buffer
+	if _, err := Run(t.Context(), st, wf, Options{
+		Workdir:  st.Root,
+		Progress: &progress,
+		Exec:     runner.Options{Stdin: strings.NewReader(""), Stdout: &out, Stderr: &errOut},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); !strings.Contains(got, "to-stdout") {
+		t.Fatalf("stdout = %q, want the step's stdout", got)
+	}
+	if got := errOut.String(); !strings.Contains(got, "to-stderr") {
+		t.Fatalf("stderr = %q, want the step's stderr", got)
+	}
+	// Progress announcements stay on their own writer, so a caller can
+	// separate them from what the steps printed.
+	if got := progress.String(); !strings.Contains(got, "[1/1] talker") || strings.Contains(got, "to-stdout") {
+		t.Fatalf("progress = %q, want only the step announcement", got)
+	}
+}
+
+func TestRunStopsAtCancellation(t *testing.T) {
+	st := newStore(t)
+	addScriptBody(t, st, "slow", "#!/bin/sh\necho up\nsleep 60\n")
+	addScriptBody(t, st, "next", "#!/bin/sh\necho next-ran\n")
+	wf := addWorkflow(t, st, "flow", []string{"slow", "next"})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	out := &lockedBuffer{}
+	done := make(chan *Result, 1)
+	go func() {
+		res, err := Run(ctx, st, wf, Options{
+			Workdir:  st.Root,
+			Progress: out,
+			Exec:     runner.Options{Stdin: strings.NewReader(""), Stdout: out, Stderr: out, Group: true},
+		})
+		if err != nil {
+			t.Error(err)
+		}
+		done <- res
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for !strings.Contains(out.String(), "up") {
+		if time.Now().After(deadline) {
+			t.Fatal("first step never started")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+
+	select {
+	case res := <-done:
+		if len(res.Steps) != 2 || res.Steps[1].Status != StatusSkipped {
+			t.Fatalf("steps = %+v, want the second one skipped", res.Steps)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("cancelled workflow did not return")
+	}
+	if got := out.String(); strings.Contains(got, "next-ran") {
+		t.Fatalf("output = %q, want no step started after the cancellation", got)
+	}
+}
+
+func TestReportRendersTheSummaryAndExitCode(t *testing.T) {
+	wf := command.Command{Name: "flow", Kind: command.KindWorkflow}
+	var b bytes.Buffer
+	code := Report(&b, wf, &Result{Steps: []StepResult{
+		{Name: "ok", Status: StatusSuccess},
+		{Name: "bad", Status: StatusFailed, ExitCode: 7},
+		{Name: "rest", Status: StatusSkipped},
+	}})
+	if code != 7 {
+		t.Fatalf("code = %d, want the failing step's 7", code)
+	}
+	if got := b.String(); !strings.Contains(got, "failed at step bad") {
+		t.Fatalf("report = %q", got)
+	}
+
+	b.Reset()
+	if code := Report(&b, wf, &Result{Steps: []StepResult{{Name: "ok", Status: StatusSuccess}}}); code != 0 {
+		t.Fatalf("code = %d, want 0 for an all-green run", code)
+	}
+	if got := b.String(); !strings.Contains(got, "all 1 steps succeeded") {
+		t.Fatalf("report = %q", got)
+	}
+
+	// A step that never started carries no exit code, but the workflow
+	// still has to end non-zero.
+	b.Reset()
+	if code := Report(&b, wf, &Result{Steps: []StepResult{
+		{Name: "bad", Status: StatusFailed, Err: os.ErrNotExist},
+	}}); code != 1 {
+		t.Fatalf("code = %d, want 1 for a step that never started", code)
+	}
+}
+
+// lockedBuffer is a bytes.Buffer a test can read while a step is still
+// writing into it.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
 }

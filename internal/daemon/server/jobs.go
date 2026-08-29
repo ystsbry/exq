@@ -17,9 +17,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ystsbry/exq/internal/command"
 	"github.com/ystsbry/exq/internal/daemon"
 	"github.com/ystsbry/exq/internal/runner"
 	"github.com/ystsbry/exq/internal/store"
+	"github.com/ystsbry/exq/internal/workflow"
 )
 
 // stopWait is how long job.stop waits for a job to actually finish
@@ -188,12 +190,33 @@ func (j *Jobs) run(ctx context.Context, spec daemon.JobSpec, logFile *os.File) (
 		return -1, err
 	}
 	defer func() { _ = devNull.Close() }()
-	return runner.RunWith(ctx, c, spec.Workdir, spec.Args, runner.Options{
+	execOpts := runner.Options{
 		Stdin:  devNull,
 		Stdout: logFile,
 		Stderr: logFile,
 		Group:  true,
+	}
+	if c.Kind == command.KindWorkflow {
+		return runWorkflow(ctx, st, c, spec, logFile, execOpts)
+	}
+	return runner.RunWith(ctx, c, spec.Workdir, spec.Args, execOpts)
+}
+
+// runWorkflow executes a workflow job. Progress lines, every step's own
+// output and the closing summary all land in the same log file, so
+// `exq logs` reads exactly like a workflow run in a terminal. The exit
+// code is the failing step's, matching the synchronous path.
+func runWorkflow(ctx context.Context, st *store.Store, wf command.Command, spec daemon.JobSpec, logFile *os.File, execOpts runner.Options) (int, error) {
+	res, err := workflow.Run(ctx, st, wf, workflow.Options{
+		Workdir:  spec.Workdir,
+		Values:   spec.Args,
+		Progress: logFile,
+		Exec:     execOpts,
 	})
+	if err != nil {
+		return -1, err
+	}
+	return workflow.Report(logFile, wf, res), nil
 }
 
 // finish stamps the terminal state on info and persists it.
