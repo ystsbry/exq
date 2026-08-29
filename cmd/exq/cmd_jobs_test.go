@@ -311,3 +311,80 @@ func TestRunBackgroundReportsASkippedScheduleRun(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestJobsPruneRemovesFinishedJobsOnly(t *testing.T) {
+	startDaemon(t)
+	st := newStore(t)
+	addScript(t, st, "noop", "", "#!/bin/sh\necho done\n")
+	addScript(t, st, "sleeper", "", "#!/bin/sh\necho up\nsleep 60\n")
+
+	finished, err := run(t, "", "run", "noop", "--bg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	finishedID := submittedID(t, finished)
+	waitJob(t, finishedID)
+
+	running, err := run(t, "", "run", "sleeper", "--bg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runningID := submittedID(t, running)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		info, err := daemon.ReadJobRecord(runningID)
+		if err == nil && info.State == daemon.JobRunning {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("job never started")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	out, err := run(t, "", "jobs", "--prune")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "Removed 1 job") || !strings.Contains(out, "Kept 1 job still running") {
+		t.Fatalf("prune output = %q", out)
+	}
+	if _, err := daemon.ReadJobRecord(finishedID); err == nil {
+		t.Fatal("the finished job survived the prune")
+	}
+	if _, err := daemon.ReadJobRecord(runningID); err != nil {
+		t.Fatalf("the running job was pruned: %v", err)
+	}
+	if _, err := run(t, "", "stop", runningID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestJobsPruneReportsAnEmptyHistory(t *testing.T) {
+	startDaemon(t)
+	newStore(t)
+
+	out, err := run(t, "", "jobs", "--prune")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "Nothing to prune") {
+		t.Fatalf("prune output = %q", out)
+	}
+}
+
+func TestHumanBytesPicksAReadableUnit(t *testing.T) {
+	cases := map[int64]string{
+		0:          "0 B",
+		999:        "999 B",
+		1024:       "1.0 KB",
+		1536:       "1.5 KB",
+		1048576:    "1.0 MB",
+		1073741824: "1.0 GB",
+	}
+	for in, want := range cases {
+		if got := humanBytes(in); got != want {
+			t.Errorf("humanBytes(%d) = %q, want %q", in, got, want)
+		}
+	}
+}
