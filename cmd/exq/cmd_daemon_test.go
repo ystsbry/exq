@@ -22,7 +22,8 @@ func fakeSystemctl(t *testing.T, replies map[string]string) (unitDir, callLog st
 
 	var b strings.Builder
 	for sub, out := range replies {
-		fmt.Fprintf(&b, "%s|%s\n", sub, out)
+		// One record per line, so a multi-line answer is escaped.
+		fmt.Fprintf(&b, "%s|%s\n", sub, strings.ReplaceAll(out, "\n", "\\n"))
 	}
 	if err := os.WriteFile(table, []byte(b.String()), 0o644); err != nil {
 		t.Fatal(err)
@@ -30,7 +31,7 @@ func fakeSystemctl(t *testing.T, replies map[string]string) (unitDir, callLog st
 	script := "#!/bin/sh\n" +
 		"printf '%s\\n' \"$*\" >> " + callLog + "\n" +
 		"line=$(grep -m1 \"^$2|\" " + table + " 2>/dev/null || true)\n" +
-		"if [ -n \"$line\" ]; then printf '%s\\n' \"$(printf '%s' \"$line\" | cut -d'|' -f2)\"; fi\n" +
+		"if [ -n \"$line\" ]; then printf '%b\\n' \"$(printf '%s' \"$line\" | cut -d'|' -f2)\"; fi\n" +
 		"exit 0\n"
 	if err := os.WriteFile(filepath.Join(bin, "systemctl"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)

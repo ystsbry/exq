@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -197,4 +198,62 @@ func BinaryPath(name string) string {
 func isExecutable(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir() && info.Mode().Perm()&0o111 != 0
+}
+
+// ValidateCalendar checks an OnCalendar expression with
+// `systemd-analyze calendar`, so a typo is caught at registration time
+// instead of silently never firing. A missing systemd-analyze is not
+// treated as a failure: refusing to register a schedule because the
+// checker is absent would be worse than registering an unchecked one.
+func (c *Client) ValidateCalendar(expr string) error {
+	if expr == "" {
+		return errors.New("empty OnCalendar expression")
+	}
+	if _, err := exec.LookPath(c.Analyze); err != nil {
+		return nil
+	}
+	cmd := exec.Command(c.Analyze, "calendar", expr)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		detail := strings.TrimSpace(stderr.String())
+		if detail == "" {
+			detail = strings.TrimSpace(stdout.String())
+		}
+		return fmt.Errorf("invalid OnCalendar expression %q: %s", expr, detail)
+	}
+	return nil
+}
+
+// ListUnitFiles returns the names of exq's own unit files matching a
+// glob within the unit directory. The unit files are the source of
+// truth for schedules — exq keeps no separate registry that could drift
+// out of step with them.
+func ListUnitFiles(dir, pattern string) ([]string, error) {
+	matches, err := filepath.Glob(filepath.Join(dir, pattern))
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(matches))
+	for _, m := range matches {
+		names = append(names, filepath.Base(m))
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// EscapeValue makes a string safe to interpolate into a unit file: a
+// literal % would otherwise be read as the start of a systemd specifier
+// such as %h.
+func EscapeValue(s string) string {
+	return strings.ReplaceAll(s, "%", "%%")
+}
+
+// QuoteExecArg quotes one ExecStart argument. systemd splits the command
+// line on whitespace unless the argument is quoted, and reads C-style
+// escapes inside double quotes.
+func QuoteExecArg(s string) string {
+	escaped := strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s)
+	return `"` + EscapeValue(escaped) + `"`
 }
