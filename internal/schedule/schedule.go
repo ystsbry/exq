@@ -34,6 +34,53 @@ const (
 	daemonUnit = "exqd.service"
 )
 
+// Manager registers and inspects schedules through one systemd client.
+// It is the whole API of this package: the CLI and the TUI share it, so
+// a schedule registered from either is exactly the same thing.
+type Manager struct {
+	sc *systemd.Client
+}
+
+// New returns a manager driving the calling user's systemd instance.
+func New() (*Manager, error) {
+	sc, err := systemd.New()
+	if err != nil {
+		return nil, err
+	}
+	return &Manager{sc: sc}, nil
+}
+
+// NewWith returns a manager on an existing systemd client.
+func NewWith(sc *systemd.Client) *Manager {
+	return &Manager{sc: sc}
+}
+
+// UnitPath is where a unit file of a schedule lives, for showing the
+// user what was written.
+func (m *Manager) UnitPath(name string) string {
+	return m.sc.UnitPath(name)
+}
+
+// unitDir is where this manager writes unit files.
+func (m *Manager) unitDir() string {
+	return m.sc.UnitDir
+}
+
+// ReadUnit returns the content of one of a schedule's unit files.
+func (m *Manager) ReadUnit(name string) (string, error) {
+	data, err := os.ReadFile(m.sc.UnitPath(name))
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// ValidateCalendar checks an OnCalendar expression without registering
+// anything, so a form can report a typo while the user is still typing.
+func (m *Manager) ValidateCalendar(expr string) error {
+	return m.sc.ValidateCalendar(expr)
+}
+
 // Schedule is one registered schedule, reconstructed from its units.
 type Schedule struct {
 	ID         string
@@ -70,20 +117,20 @@ type Spec struct {
 // Add validates the spec, writes the timer/service pair and enables it.
 // The OnCalendar expression is checked first, so an invalid one leaves
 // nothing behind.
-func Add(sc *systemd.Client, spec Spec) (*Schedule, error) {
+func (m *Manager) Add(spec Spec) (*Schedule, error) {
 	if err := command.ValidateName(spec.Name); err != nil {
 		return nil, err
 	}
 	if !filepath.IsAbs(spec.ProjectDir) || !filepath.IsAbs(spec.Workdir) {
 		return nil, errors.New("schedule needs absolute project and working directories")
 	}
-	if err := sc.ValidateCalendar(spec.OnCalendar); err != nil {
+	if err := m.sc.ValidateCalendar(spec.OnCalendar); err != nil {
 		return nil, err
 	}
-	if err := sc.Available(); err != nil {
+	if err := m.sc.Available(); err != nil {
 		return nil, err
 	}
-	id, err := newID(sc, spec)
+	id, err := newID(m.sc, spec)
 	if err != nil {
 		return nil, err
 	}
@@ -96,21 +143,21 @@ func Add(sc *systemd.Client, spec Spec) (*Schedule, error) {
 		OnCalendar: spec.OnCalendar,
 	}
 	timer, service := UnitFiles(*s)
-	if _, err := sc.WriteUnit(s.ServiceUnit(), service); err != nil {
+	if _, err := m.sc.WriteUnit(s.ServiceUnit(), service); err != nil {
 		return nil, err
 	}
-	if _, err := sc.WriteUnit(s.TimerUnit(), timer); err != nil {
+	if _, err := m.sc.WriteUnit(s.TimerUnit(), timer); err != nil {
 		return nil, err
 	}
-	if err := sc.DaemonReload(); err != nil {
+	if err := m.sc.DaemonReload(); err != nil {
 		return nil, err
 	}
-	if err := sc.EnableNow(s.TimerUnit()); err != nil {
+	if err := m.sc.EnableNow(s.TimerUnit()); err != nil {
 		// Leaving half a schedule behind would show up in `schedule list`
 		// as something that never fires.
-		_ = sc.RemoveUnit(s.TimerUnit())
-		_ = sc.RemoveUnit(s.ServiceUnit())
-		_ = sc.DaemonReload()
+		_ = m.sc.RemoveUnit(s.TimerUnit())
+		_ = m.sc.RemoveUnit(s.ServiceUnit())
+		_ = m.sc.DaemonReload()
 		return nil, err
 	}
 	return s, nil
@@ -118,15 +165,15 @@ func Add(sc *systemd.Client, spec Spec) (*Schedule, error) {
 
 // List returns every registered schedule, enriched with what systemd
 // knows about it: the next firing time and how the last submit went.
-func List(sc *systemd.Client) ([]Schedule, error) {
-	names, err := systemd.ListUnitFiles(sc.UnitDir, unitPrefix+"*.timer")
+func (m *Manager) List() ([]Schedule, error) {
+	names, err := systemd.ListUnitFiles(m.sc.UnitDir, unitPrefix+"*.timer")
 	if err != nil {
 		return nil, err
 	}
 	schedules := make([]Schedule, 0, len(names))
 	for _, name := range names {
 		id := strings.TrimSuffix(strings.TrimPrefix(name, unitPrefix), ".timer")
-		s, err := load(sc, id)
+		s, err := load(m.sc, id)
 		if err != nil {
 			// A unit we cannot parse is not a reason to hide the rest.
 			continue
@@ -137,35 +184,35 @@ func List(sc *systemd.Client) ([]Schedule, error) {
 }
 
 // Get returns one schedule by id.
-func Get(sc *systemd.Client, id string) (*Schedule, error) {
+func (m *Manager) Get(id string) (*Schedule, error) {
 	if err := validateID(id); err != nil {
 		return nil, err
 	}
-	return load(sc, id)
+	return load(m.sc, id)
 }
 
 // Remove stops and deletes a schedule's units.
-func Remove(sc *systemd.Client, id string) error {
-	s, err := Get(sc, id)
+func (m *Manager) Remove(id string) error {
+	s, err := m.Get(id)
 	if err != nil {
 		return err
 	}
-	if err := sc.Available(); err != nil {
+	if err := m.sc.Available(); err != nil {
 		return err
 	}
 	// Disabling can fail on a unit systemd never loaded; the files still
 	// have to go, or `schedule list` keeps showing a dead schedule.
-	disableErr := sc.DisableNow(s.TimerUnit())
-	if err := sc.RemoveUnit(s.TimerUnit()); err != nil {
+	disableErr := m.sc.DisableNow(s.TimerUnit())
+	if err := m.sc.RemoveUnit(s.TimerUnit()); err != nil {
 		return err
 	}
-	if err := sc.RemoveUnit(s.ServiceUnit()); err != nil {
+	if err := m.sc.RemoveUnit(s.ServiceUnit()); err != nil {
 		return err
 	}
-	if err := sc.DaemonReload(); err != nil {
+	if err := m.sc.DaemonReload(); err != nil {
 		return err
 	}
-	if disableErr != nil && exists(sc.UnitPath(s.TimerUnit())) {
+	if disableErr != nil && exists(m.sc.UnitPath(s.TimerUnit())) {
 		return disableErr
 	}
 	return nil

@@ -20,6 +20,7 @@ import (
 
 	"github.com/ystsbry/exq/internal/command"
 	"github.com/ystsbry/exq/internal/daemon"
+	"github.com/ystsbry/exq/internal/schedule"
 	"github.com/ystsbry/exq/internal/store"
 )
 
@@ -71,11 +72,22 @@ type JobClient interface {
 	List() ([]daemon.JobInfo, error)
 }
 
+// ScheduleClient is the part of internal/schedule the TUI needs, so the
+// browser can register and inspect timers without a systemd instance
+// being present in a test.
+type ScheduleClient interface {
+	Add(schedule.Spec) (*schedule.Schedule, error)
+	List() ([]schedule.Schedule, error)
+	Remove(id string) error
+	ReadUnit(name string) (string, error)
+}
+
 // Deps are the outside services the browser talks to. A zero Deps still
-// gives a working browser: the jobs tab then reports that the daemon is
-// unavailable instead of listing anything.
+// gives a working browser: the jobs and schedules tabs then report that
+// their service is unavailable instead of listing anything.
 type Deps struct {
-	Jobs JobClient
+	Jobs      JobClient
+	Schedules ScheduleClient
 }
 
 // Run shows the tabbed command browser until the user picks a command to
@@ -91,7 +103,7 @@ func Run(st *store.Store, deps Deps) (*Result, error) {
 	// screen is restored, so no TUI frame residue precedes command output.
 	m := newModel(st, items)
 	m.deps = deps
-	m = m.refreshJobs()
+	m = m.refreshJobs().refreshSchedules()
 	final, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
 	if err != nil {
 		return nil, err
@@ -113,6 +125,8 @@ const (
 	modeConfirmDelete
 	modeArgsForm
 	modeJobLog
+	modeScheduleForm
+	modeScheduleDetail
 )
 
 // tabContent says what a tab lists: commands of one kind, or the
@@ -123,6 +137,7 @@ type tabContent int
 const (
 	contentCommands tabContent = iota
 	contentJobs
+	contentSchedules
 )
 
 // tabDef is one entry in the top tab bar. The bar, ←/→ switching, and
@@ -159,6 +174,12 @@ type model struct {
 	logJob  string   // id of the job whose log is open
 	logLine []string // that job's log, split into lines
 	logOff  int      // first visible log line
+
+	schedules []schedule.Schedule
+	schedErr  string   // why the schedule list is unavailable, if it is
+	formErr   string   // validation failure shown inside the schedule form
+	detail    string   // id of the schedule whose detail view is open
+	detailBox []string // that schedule's unit and history, split into lines
 }
 
 func newModel(st *store.Store, items []command.Command) model {
@@ -166,6 +187,7 @@ func newModel(st *store.Store, items []command.Command) model {
 		{title: command.KindScript.String(), content: contentCommands, kind: command.KindScript},
 		{title: command.KindWorkflow.String(), content: contentCommands, kind: command.KindWorkflow},
 		{title: "jobs", content: contentJobs},
+		{title: "schedules", content: contentSchedules},
 	}
 	return model{
 		store:   st,
@@ -217,8 +239,11 @@ func (m model) kindCount(k command.Kind) int {
 // tabCount is how many rows a tab has, for its label in the bar and for
 // keeping the cursor in range.
 func (m model) tabCount(i int) int {
-	if m.tabs[i].content == contentJobs {
+	switch m.tabs[i].content {
+	case contentJobs:
 		return len(m.jobs)
+	case contentSchedules:
+		return len(m.schedules)
 	}
 	return m.kindCount(m.tabs[i].kind)
 }
@@ -261,6 +286,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateArgsForm(msg)
 		case modeJobLog:
 			return m.updateJobLog(msg)
+		case modeScheduleForm:
+			return m.updateScheduleForm(msg)
+		case modeScheduleDetail:
+			return m.updateScheduleDetail(msg)
 		default:
 			return m.updateBrowse(msg)
 		}
@@ -270,8 +299,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) updateBrowse(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.errMsg = ""
-	if m.tabs[m.active].content == contentJobs {
+	switch m.tabs[m.active].content {
+	case contentJobs:
 		return m.updateJobsTab(msg)
+	case contentSchedules:
+		return m.updateSchedulesTab(msg)
 	}
 	switch msg.String() {
 	case "ctrl+c", "q", "esc":
@@ -308,6 +340,11 @@ func (m model) updateBrowse(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.formIdx = idx
 		return m.enterArgsForm()
+	case "s":
+		if idx, ok := m.current(); ok {
+			m.formIdx = idx
+			return m.enterScheduleForm()
+		}
 	case "b":
 		if idx, ok := m.current(); ok {
 			// A background run needs no terminal, so it happens here and
@@ -323,6 +360,9 @@ func (m model) updateBrowse(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.tabs[m.active].content == contentSchedules {
+		return m.updateConfirmRemoveSchedule(msg)
+	}
 	switch msg.String() {
 	case "y", "Y":
 		if idx, ok := m.current(); ok {
@@ -419,8 +459,14 @@ func (m model) View() string {
 		return m.viewArgsForm()
 	case m.mode == modeJobLog:
 		return m.viewJobLog()
+	case m.mode == modeScheduleForm:
+		return m.viewScheduleForm()
+	case m.mode == modeScheduleDetail:
+		return m.viewScheduleDetail()
 	case m.tabs[m.active].content == contentJobs:
 		return m.viewJobs()
+	case m.tabs[m.active].content == contentSchedules:
+		return m.viewSchedules()
 	default:
 		return m.viewList()
 	}
@@ -601,7 +647,7 @@ func (m model) viewList() string {
 			b.WriteString(warnStyle.Render(fmt.Sprintf("delete %q? [y/N]", m.items[idx].Name)))
 		}
 	default:
-		b.WriteString(helpStyle.Render("←/→: switch tab   ↑/↓ or j/k: move   enter: run   b: background   d: delete   q/esc: quit"))
+		b.WriteString(helpStyle.Render("←/→: tab   ↑/↓: move   enter: run   b: background   s: schedule   d: delete   q: quit"))
 	}
 	b.WriteString("\n")
 	return b.String()

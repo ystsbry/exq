@@ -29,7 +29,9 @@ func TestSnapshotsRenderAllStates(t *testing.T) {
 
 	for _, want := range []string{
 		"browse", "browse-workflows", "browse-jobs", "browse-jobs-unavailable",
-		"job-log", "browse-empty", "confirm-delete", "args-form", "error",
+		"job-log", "browse-schedules", "confirm-remove-schedule", "schedule-detail",
+		"schedule-form", "schedule-form-invalid",
+		"browse-empty", "confirm-delete", "args-form", "error",
 	} {
 		if _, ok := byName[want]; !ok {
 			t.Errorf("missing snapshot %q", want)
@@ -67,6 +69,20 @@ func TestSnapshotsRenderAllStates(t *testing.T) {
 	}
 	if !strings.Contains(byName["job-log"], "all 2 steps succeeded") {
 		t.Errorf("job-log snapshot should show log content:\n%s", byName["job-log"])
+	}
+	// The stale schedule carries the (!) marker the list uses for a
+	// working directory that is gone.
+	if !strings.Contains(byName["browse-schedules"], "!") {
+		t.Errorf("schedules snapshot should flag the stale schedule:\n%s", byName["browse-schedules"])
+	}
+	if !strings.Contains(byName["schedule-form"], "on-calendar") {
+		t.Errorf("schedule-form snapshot should show the calendar field:\n%s", byName["schedule-form"])
+	}
+	if !strings.Contains(byName["schedule-form-invalid"], "Failed to parse") {
+		t.Errorf("invalid-form snapshot should show the validation error:\n%s", byName["schedule-form-invalid"])
+	}
+	if !strings.Contains(byName["schedule-detail"], "OnCalendar=Mon..Fri 09:00") {
+		t.Errorf("schedule-detail snapshot should show the generated unit:\n%s", byName["schedule-detail"])
 	}
 }
 

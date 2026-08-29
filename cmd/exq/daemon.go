@@ -10,12 +10,25 @@ import (
 	"time"
 
 	"github.com/ystsbry/exq/internal/daemon"
+	"github.com/ystsbry/exq/internal/schedule"
+	"github.com/ystsbry/exq/internal/tui"
 )
 
 // daemonClient returns a client for the exqd socket at its conventional
 // location.
 func daemonClient() *daemon.Client {
 	return daemon.NewClient("")
+}
+
+// tuiDeps wires the browser to the services it can use. A systemd
+// instance that cannot be reached is not fatal: the schedules tab says
+// so and everything else keeps working.
+func tuiDeps() tui.Deps {
+	deps := tui.Deps{Jobs: daemonClient()}
+	if mgr, err := schedule.New(); err == nil {
+		deps.Schedules = mgr
+	}
+	return deps
 }
 
 // daemonHint turns a transport failure into advice. exqd is a separate,
