@@ -19,7 +19,7 @@ import (
 // replies maps a systemctl subcommand to the text it prints; `calendar`
 // arguments listed in badCalendars make systemd-analyze fail. It returns
 // the client and the path of the systemctl call log.
-func fakeSystemd(t *testing.T, replies map[string]string, badCalendars ...string) (*systemd.Client, string) {
+func fakeSystemd(t *testing.T, replies map[string]string, badCalendars ...string) (*Manager, string) {
 	t.Helper()
 	bin := t.TempDir()
 	callLog := filepath.Join(bin, "calls.log")
@@ -55,7 +55,7 @@ func fakeSystemd(t *testing.T, replies map[string]string, badCalendars ...string
 	if err != nil {
 		t.Fatal(err)
 	}
-	return c, callLog
+	return NewWith(c), callLog
 }
 
 // spec is a schedule registration rooted at a real temporary directory,
@@ -75,18 +75,18 @@ func newSpec(t *testing.T, name string, values ...string) Spec {
 	}
 }
 
-func readUnit(t *testing.T, sc *systemd.Client, name string) string {
+func readUnit(t *testing.T, sc *Manager, name string) string {
 	t.Helper()
-	data, err := os.ReadFile(sc.UnitPath(name))
+	data, err := sc.ReadUnit(name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(data)
+	return data
 }
 
 func TestAddWritesAndEnablesTheUnitPair(t *testing.T) {
 	sc, callLog := fakeSystemd(t, map[string]string{"show": "Version=255"})
-	s, err := Add(sc, newSpec(t, "test"))
+	s, err := sc.Add(newSpec(t, "test"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestAddWritesAndEnablesTheUnitPair(t *testing.T) {
 
 func TestAddPassesValuesThroughExecStart(t *testing.T) {
 	sc, _ := fakeSystemd(t, map[string]string{"show": "Version=255"})
-	s, err := Add(sc, newSpec(t, "deploy", "prod", "a b", ""))
+	s, err := sc.Add(newSpec(t, "deploy", "prod", "a b", ""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestAddEscapesPercentInUnitValues(t *testing.T) {
 	sc, _ := fakeSystemd(t, map[string]string{"show": "Version=255"})
 	spec := newSpec(t, "report", "100%")
 	spec.OnCalendar = "daily"
-	s, err := Add(sc, spec)
+	s, err := sc.Add(spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestAddEscapesPercentInUnitValues(t *testing.T) {
 	if got := s.Values; len(got) != 1 || got[0] != "100%" {
 		t.Fatalf("values = %v", got)
 	}
-	back, err := Get(sc, s.ID)
+	back, err := sc.Get(s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,10 +171,10 @@ func TestAddRejectsAnInvalidCalendarWithoutWritingAnything(t *testing.T) {
 	spec := newSpec(t, "test")
 	spec.OnCalendar = "every tuesday-ish"
 
-	if _, err := Add(sc, spec); err == nil {
+	if _, err := sc.Add(spec); err == nil {
 		t.Fatal("want an error for an invalid OnCalendar expression")
 	}
-	entries, err := systemd.ListUnitFiles(sc.UnitDir, unitPrefix+"*")
+	entries, err := systemd.ListUnitFiles(sc.unitDir(), unitPrefix+"*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,14 +186,14 @@ func TestAddRejectsAnInvalidCalendarWithoutWritingAnything(t *testing.T) {
 func TestAddDisambiguatesRepeatedRegistrations(t *testing.T) {
 	sc, _ := fakeSystemd(t, map[string]string{"show": "Version=255"})
 	spec := newSpec(t, "test")
-	first, err := Add(sc, spec)
+	first, err := sc.Add(spec)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// The same command on a second calendar is legitimate, so the id
 	// gains a suffix rather than the registration failing.
 	spec.OnCalendar = "daily"
-	second, err := Add(sc, spec)
+	second, err := sc.Add(spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,11 +210,11 @@ func TestListReconstructsSchedulesFromUnits(t *testing.T) {
 		"show": "NextElapseUSecRealtime=1787000000000000\nResult=success\nExecMainStartTimestamp=Fri 2026-08-28 09:00:00 JST",
 	})
 	spec := newSpec(t, "test", "prod")
-	if _, err := Add(sc, spec); err != nil {
+	if _, err := sc.Add(spec); err != nil {
 		t.Fatal(err)
 	}
 
-	schedules, err := List(sc)
+	schedules, err := sc.List()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +242,7 @@ func TestListReconstructsSchedulesFromUnits(t *testing.T) {
 func TestListFlagsAMissingWorkdir(t *testing.T) {
 	sc, _ := fakeSystemd(t, nil)
 	spec := newSpec(t, "test")
-	if _, err := Add(sc, spec); err != nil {
+	if _, err := sc.Add(spec); err != nil {
 		t.Fatal(err)
 	}
 	// The project directory is what disappears when a repository is
@@ -251,7 +251,7 @@ func TestListFlagsAMissingWorkdir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	schedules, err := List(sc)
+	schedules, err := sc.List()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,10 +263,13 @@ func TestListFlagsAMissingWorkdir(t *testing.T) {
 func TestListIgnoresUnitsItCannotRead(t *testing.T) {
 	sc, _ := fakeSystemd(t, nil)
 	// A timer without its service is a half-removed schedule.
-	if _, err := sc.WriteUnit(unitPrefix+"orphan.timer", "[Timer]\n"); err != nil {
+	if err := os.MkdirAll(sc.unitDir(), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	schedules, err := List(sc)
+	if err := os.WriteFile(filepath.Join(sc.unitDir(), unitPrefix+"orphan.timer"), []byte("[Timer]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	schedules, err := sc.List()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,14 +280,14 @@ func TestListIgnoresUnitsItCannotRead(t *testing.T) {
 
 func TestRemoveDisablesAndDeletesTheUnits(t *testing.T) {
 	sc, callLog := fakeSystemd(t, map[string]string{"show": "Version=255"})
-	s, err := Add(sc, newSpec(t, "test"))
+	s, err := sc.Add(newSpec(t, "test"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Remove(sc, s.ID); err != nil {
+	if err := sc.Remove(s.ID); err != nil {
 		t.Fatal(err)
 	}
-	remaining, err := systemd.ListUnitFiles(sc.UnitDir, unitPrefix+"*")
+	remaining, err := systemd.ListUnitFiles(sc.unitDir(), unitPrefix+"*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,10 +306,10 @@ func TestRemoveDisablesAndDeletesTheUnits(t *testing.T) {
 func TestGetAndRemoveRejectUnknownOrUnsafeIDs(t *testing.T) {
 	sc, _ := fakeSystemd(t, nil)
 	for _, id := range []string{"", "../escape", "no-such-schedule"} {
-		if _, err := Get(sc, id); err == nil {
+		if _, err := sc.Get(id); err == nil {
 			t.Fatalf("Get(%q): want an error", id)
 		}
-		if err := Remove(sc, id); err == nil {
+		if err := sc.Remove(id); err == nil {
 			t.Fatalf("Remove(%q): want an error", id)
 		}
 	}

@@ -172,7 +172,7 @@ func (m model) updateJobLog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "g":
 		m.logOff = 0
 	case "G":
-		m.logOff = max(len(m.logLine)-m.logBudget(), 0)
+		m.logOff = max(len(m.logLine)-m.viewBudget(len(m.logLine)), 0)
 	case "r":
 		for _, job := range m.jobs {
 			if job.ID == m.logJob {
@@ -267,10 +267,12 @@ func jobTiming(job daemon.JobInfo, now time.Time) string {
 	return fmt.Sprintf("%s  %s", job.StartedAt.Local().Format("15:04:05"), d.Round(time.Second))
 }
 
-// logBudget is how many log lines fit on screen.
-func (m model) logBudget() int {
+// viewBudget is how many lines of a full-screen text view fit, out of
+// total. Unknown height (snapshots, before the first WindowSizeMsg)
+// means no clipping.
+func (m model) viewBudget(total int) int {
 	if m.height <= 0 {
-		return len(m.logLine)
+		return total
 	}
 	// Title, blank line, footer and the line the shell prompt returns to.
 	return max(m.height-4, 1)
@@ -281,7 +283,7 @@ func (m model) viewJobLog() string {
 	b.WriteString(titleStyle.Render("log: " + m.logJob))
 	b.WriteString("\n\n")
 
-	budget := m.logBudget()
+	budget := m.viewBudget(len(m.logLine))
 	off := min(m.logOff, max(len(m.logLine)-1, 0))
 	end := min(off+budget, len(m.logLine))
 	for _, line := range m.logLine[off:end] {

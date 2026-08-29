@@ -10,7 +10,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ystsbry/exq/internal/schedule"
-	"github.com/ystsbry/exq/internal/systemd"
 )
 
 func newScheduleCmd() *cobra.Command {
@@ -71,11 +70,11 @@ pass them.`,
 			if err != nil {
 				return err
 			}
-			sc, err := systemd.New()
+			sc, err := schedule.New()
 			if err != nil {
 				return err
 			}
-			s, err := schedule.Add(sc, schedule.Spec{
+			s, err := sc.Add(schedule.Spec{
 				Name:       c.Name,
 				ProjectDir: st.Root,
 				Workdir:    st.Root,
@@ -105,11 +104,11 @@ func newScheduleListCmd() *cobra.Command {
 		Short:   "List registered schedules",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			sc, err := systemd.New()
+			sc, err := schedule.New()
 			if err != nil {
 				return err
 			}
-			schedules, err := schedule.List(sc)
+			schedules, err := sc.List()
 			if err != nil {
 				return err
 			}
@@ -133,11 +132,11 @@ func newScheduleRemoveCmd() *cobra.Command {
 		Short:   "Stop a schedule and delete its units",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			sc, err := systemd.New()
+			sc, err := schedule.New()
 			if err != nil {
 				return err
 			}
-			s, err := schedule.Get(sc, args[0])
+			s, err := sc.Get(args[0])
 			if err != nil {
 				return err
 			}
@@ -146,7 +145,7 @@ func newScheduleRemoveCmd() *cobra.Command {
 				fmt.Fprintln(out, "Cancelled.")
 				return nil
 			}
-			if err := schedule.Remove(sc, s.ID); err != nil {
+			if err := sc.Remove(s.ID); err != nil {
 				return err
 			}
 			fmt.Fprintf(out, "Removed schedule %s (%s)\n", s.ID, s.Name)

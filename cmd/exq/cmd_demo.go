@@ -128,7 +128,7 @@ is rendered to stdout instead — no TTY or key input needed.`,
 
 			rep := herdr.New()
 			rep.Report(herdr.StateIdle, "", "")
-			res, err := tui.Run(st, tui.Deps{Jobs: daemonClient()})
+			res, err := tui.Run(st, tuiDeps())
 			if err != nil {
 				rep.Release()
 				return err
