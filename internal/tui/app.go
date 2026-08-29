@@ -9,6 +9,7 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -74,7 +75,10 @@ func Run(st *store.Store) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := final.(model)
+	out, ok := final.(model)
+	if !ok {
+		return nil, fmt.Errorf("tui: unexpected final model %T", final)
+	}
 	if out.chosen < 0 || out.chosen >= len(out.items) {
 		return nil, nil
 	}
@@ -353,26 +357,28 @@ func (m model) cardWidth(idxs []int) int {
 	w := 0
 	for _, idx := range idxs {
 		it := m.items[idx]
-		if lw := lipgloss.Width("▸ " + it.Name); lw > w {
-			w = lw
-		}
+		w = max(w, lipgloss.Width("▸ "+it.Name))
 		if meta := it.Meta(); meta != "" {
-			if lw := lipgloss.Width("    "+meta) + 1; lw > w {
-				w = lw
-			}
+			w = max(w, lipgloss.Width("    "+meta)+1)
 		}
 	}
-	if m.width > 0 && w > m.width {
-		w = m.width
+	if m.width > 0 {
+		w = min(w, m.width)
 	}
 	return w
 }
 
-// blockHeight is the list-line cost of one card: name (+ description)
-// plus the gap that follows it.
+// maxBlockHeight is the tallest one card can be: its name, its meta line,
+// and the gap that follows. listBudget never falls below it, which is what
+// guarantees the cursor's card always fits — keep the two in step if a
+// card ever grows another line.
+const maxBlockHeight = 3
+
+// blockHeight is the list-line cost of one card: name (+ meta line) plus
+// the gap that follows it.
 func (m model) blockHeight(it command.Command) int {
 	if it.Meta() != "" {
-		return 3
+		return maxBlockHeight
 	}
 	return 2
 }
@@ -382,17 +388,14 @@ func (m model) blockHeight(it command.Command) int {
 // means no clipping. Two lines are reserved for the ↑/↓ indicators.
 func (m model) listBudget() int {
 	if m.height <= 0 {
-		return int(^uint(0) >> 1)
+		return math.MaxInt
 	}
 	overhead := lipgloss.Height(m.viewTabBar()) + 2 + 2
 	if m.errMsg != "" {
 		overhead++
 	}
-	b := m.height - overhead
-	if b < 3 {
-		b = 3
-	}
-	return b
+	// Never clip below a whole card, however cramped the terminal is.
+	return max(m.height-overhead, maxBlockHeight)
 }
 
 // visibleEnd returns the index just past the last card that fits when
@@ -407,8 +410,10 @@ func (m model) visibleEnd(idxs []int, off, budget int) int {
 		used += h
 		end = i + 1
 	}
+	// Unreachable while listBudget floors at maxBlockHeight: the first
+	// card always fits. Kept as the backstop for that invariant.
 	if end == off && off < len(idxs) {
-		end = off + 1 // always show at least the cursor's card
+		end = off + 1
 	}
 	return end
 }

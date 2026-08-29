@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -41,14 +42,10 @@ func addScript(t *testing.T, st *store.Store, name string, exitCode int) {
 	if err := os.WriteFile(filepath.Join(dir, command.MetaFile), []byte(meta), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	script := "#!/bin/sh\necho " + name + " >> order.txt\nexit " + itoa(exitCode) + "\n"
+	script := "#!/bin/sh\necho " + name + " >> order.txt\nexit " + strconv.Itoa(exitCode) + "\n"
 	if err := os.WriteFile(filepath.Join(dir, command.RunFile), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-}
-
-func itoa(n int) string {
-	return string(rune('0' + n))
 }
 
 // addWorkflow writes a workflow with the given steps and declared args.

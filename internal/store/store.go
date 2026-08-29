@@ -5,11 +5,14 @@ package store
 
 import (
 	"bytes"
+	"cmp"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/ystsbry/exq/internal/command"
@@ -144,7 +147,7 @@ func (s *Store) Init() (*InitResult, error) {
 func (s *Store) migrateLegacy() ([]string, error) {
 	entries, err := os.ReadDir(s.legacyDir())
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, err
@@ -180,7 +183,7 @@ func (s *Store) List() ([]command.Command, error) {
 		dir, kind := loc.dir, loc.kind
 		entries, err := os.ReadDir(dir)
 		if err != nil {
-			if os.IsNotExist(err) {
+			if errors.Is(err, fs.ErrNotExist) {
 				continue
 			}
 			return nil, err
@@ -201,11 +204,8 @@ func (s *Store) List() ([]command.Command, error) {
 	}
 	// Kind-major order so the UIs can render a scripts section followed
 	// by a workflows section without re-sorting.
-	sort.Slice(cmds, func(i, j int) bool {
-		if cmds[i].Kind != cmds[j].Kind {
-			return cmds[i].Kind < cmds[j].Kind
-		}
-		return cmds[i].Name < cmds[j].Name
+	slices.SortFunc(cmds, func(a, b command.Command) int {
+		return cmp.Or(cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Name, b.Name))
 	})
 	return cmds, nil
 }
@@ -272,7 +272,7 @@ func gitExcludePath(root string) (string, error) {
 // already present. Returns true when the file was modified.
 func ensureLine(path, line string) (bool, error) {
 	data, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return false, err
 	}
 	for _, l := range strings.Split(string(data), "\n") {

@@ -28,9 +28,7 @@ func newListCmd() *cobra.Command {
 			}
 			width := 0
 			for _, c := range cmds {
-				if len(c.Name) > width {
-					width = len(c.Name)
-				}
+				width = max(width, len(c.Name))
 			}
 			// cmds arrive kind-major from the store: scripts first, then
 			// workflows, each under its own section header.
