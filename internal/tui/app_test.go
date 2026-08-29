@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -387,7 +389,7 @@ func TestConfirmDeletePromptAndRemoval(t *testing.T) {
 	if len(out.items) != 1 || out.items[0].Name != "keep" {
 		t.Fatalf("items = %+v, want only keep", out.items)
 	}
-	if _, err := os.Stat(filepath.Join(st.ScriptsDir(), "zap")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(st.ScriptsDir(), "zap")); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("command directory should be gone: %v", err)
 	}
 	// The cursor was on the deleted (last) entry, so it must come back into
@@ -458,7 +460,7 @@ func TestConfirmDeleteShowsReloadError(t *testing.T) {
 	if out.errMsg == "" {
 		t.Error("errMsg is empty, want the reload failure surfaced")
 	}
-	if _, err := os.Stat(filepath.Join(st.ScriptsDir(), "zap")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(st.ScriptsDir(), "zap")); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("the command was still removed, so it should be gone: %v", err)
 	}
 }

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,7 +53,7 @@ func TestRemoveCommandWithYesFlagSkipsPrompt(t *testing.T) {
 	if strings.Contains(out, "[y/N]") {
 		t.Errorf("--yes should skip the prompt:\n%s", out)
 	}
-	if _, statErr := os.Stat(filepath.Join(st.ScriptsDir(), "doomed")); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(filepath.Join(st.ScriptsDir(), "doomed")); !errors.Is(statErr, fs.ErrNotExist) {
 		t.Errorf("command directory should be gone: %v", statErr)
 	}
 }
@@ -67,7 +69,7 @@ func TestRemoveCommandConfirmed(t *testing.T) {
 	if !strings.Contains(out, "Removed doomed") {
 		t.Errorf("output should confirm the removal:\n%s", out)
 	}
-	if _, statErr := os.Stat(filepath.Join(st.ScriptsDir(), "doomed")); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(filepath.Join(st.ScriptsDir(), "doomed")); !errors.Is(statErr, fs.ErrNotExist) {
 		t.Errorf("command directory should be gone: %v", statErr)
 	}
 }
@@ -96,7 +98,7 @@ func TestRemoveCommandAliasRm(t *testing.T) {
 	if _, err := run(t, "", "rm", "doomed", "-y"); err != nil {
 		t.Fatal(err)
 	}
-	if _, statErr := os.Stat(filepath.Join(st.ScriptsDir(), "doomed")); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(filepath.Join(st.ScriptsDir(), "doomed")); !errors.Is(statErr, fs.ErrNotExist) {
 		t.Errorf("`rm` should behave like `remove`: %v", statErr)
 	}
 }
@@ -108,7 +110,7 @@ func TestRemoveCommandRemovesWorkflows(t *testing.T) {
 	if _, err := run(t, "", "remove", "flow", "-y"); err != nil {
 		t.Fatal(err)
 	}
-	if _, statErr := os.Stat(filepath.Join(st.WorkflowsDir(), "flow")); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(filepath.Join(st.WorkflowsDir(), "flow")); !errors.Is(statErr, fs.ErrNotExist) {
 		t.Errorf("workflow directory should be gone: %v", statErr)
 	}
 }
