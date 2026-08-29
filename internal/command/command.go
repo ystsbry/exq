@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -43,6 +44,16 @@ const (
 	KindWorkflow
 )
 
+// String is the label the UIs show for a kind. It matches the name of the
+// .exq subdirectory the kind lives in, so what the user reads is what they
+// find on disk.
+func (k Kind) String() string {
+	if k == KindWorkflow {
+		return "workflows"
+	}
+	return "scripts"
+}
+
 // Command is a single exq command discovered on disk.
 type Command struct {
 	Name        string
@@ -56,6 +67,26 @@ type Command struct {
 // RunPath returns the absolute path of the command's entrypoint.
 func (c Command) RunPath() string {
 	return filepath.Join(c.Dir, RunFile)
+}
+
+// Meta is the one-line summary shown beside a command's name: the
+// description, followed by what the command is made of — the declared
+// argument keys for a script, the step sequence for a workflow. Both parts
+// are optional, so the result may be empty. The TUI list and `exq list`
+// share it so the two never drift apart.
+func (c Command) Meta() string {
+	switch {
+	case c.Kind == KindWorkflow && len(c.Steps) > 0:
+		return strings.TrimSpace(c.Description + " (steps: " + strings.Join(c.Steps, " → ") + ")")
+	case len(c.Args) > 0:
+		keys := make([]string, len(c.Args))
+		for i, a := range c.Args {
+			keys[i] = a.Key
+		}
+		return strings.TrimSpace(c.Description + " (args: " + strings.Join(keys, ", ") + ")")
+	default:
+		return c.Description
+	}
 }
 
 // meta mirrors command.toml.

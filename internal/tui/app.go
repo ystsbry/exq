@@ -120,8 +120,8 @@ type model struct {
 
 func newModel(st *store.Store, items []command.Command) model {
 	tabs := []tabDef{
-		{title: "scripts", kind: command.KindScript},
-		{title: "workflows", kind: command.KindWorkflow},
+		{title: command.KindScript.String(), kind: command.KindScript},
+		{title: command.KindWorkflow.String(), kind: command.KindWorkflow},
 	}
 	return model{
 		store:   st,
@@ -356,7 +356,7 @@ func (m model) cardWidth(idxs []int) int {
 		if lw := lipgloss.Width("▸ " + it.Name); lw > w {
 			w = lw
 		}
-		if meta := describeItem(it); meta != "" {
+		if meta := it.Meta(); meta != "" {
 			if lw := lipgloss.Width("    "+meta) + 1; lw > w {
 				w = lw
 			}
@@ -371,7 +371,7 @@ func (m model) cardWidth(idxs []int) int {
 // blockHeight is the list-line cost of one card: name (+ description)
 // plus the gap that follows it.
 func (m model) blockHeight(it command.Command) int {
-	if describeItem(it) != "" {
+	if it.Meta() != "" {
 		return 3
 	}
 	return 2
@@ -431,10 +431,11 @@ func (m model) adjustScroll() model {
 
 // emptyTabHint tells how to add an entry of the active tab's kind.
 func (m model) emptyTabHint() string {
-	if m.tabs[m.active].kind == command.KindWorkflow {
-		return "  no workflows yet — define steps in " + m.store.WorkflowsDir() + "/<name>/command.toml"
+	kind := m.tabs[m.active].kind
+	if kind == command.KindWorkflow {
+		return "  no " + kind.String() + " yet — define steps in " + m.store.WorkflowsDir() + "/<name>/command.toml"
 	}
-	return "  no scripts yet — add one under " + m.store.ScriptsDir()
+	return "  no " + kind.String() + " yet — add one under " + m.store.ScriptsDir()
 }
 
 func (m model) viewList() string {
@@ -459,7 +460,7 @@ func (m model) viewList() string {
 	}
 	for pos := off; pos < end; pos++ {
 		it := m.items[idxs[pos]]
-		meta := describeItem(it)
+		meta := it.Meta()
 		if pos == m.cursors[m.active] {
 			b.WriteString(selCardNameStyle.Width(cardW).Render("▸ " + it.Name))
 			b.WriteString("\n")
@@ -537,21 +538,4 @@ func (m model) viewArgsForm() string {
 	b.WriteString(helpStyle.Render("tab/↑↓: move   enter: run (empty = \"\")   esc: back"))
 	b.WriteString("\n")
 	return b.String()
-}
-
-// describeItem is the dim meta line under a command name in the list:
-// the description plus the declared argument keys (scripts) or the step
-// sequence (workflows), either part optional.
-func describeItem(it command.Command) string {
-	meta := it.Description
-	if it.Kind == command.KindWorkflow && len(it.Steps) > 0 {
-		meta = strings.TrimSpace(meta + " (steps: " + strings.Join(it.Steps, " → ") + ")")
-	} else if len(it.Args) > 0 {
-		keys := make([]string, len(it.Args))
-		for i, a := range it.Args {
-			keys[i] = a.Key
-		}
-		meta = strings.TrimSpace(meta + " (args: " + strings.Join(keys, ", ") + ")")
-	}
-	return meta
 }
