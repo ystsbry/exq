@@ -4,6 +4,7 @@
 package workflow
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -127,30 +128,47 @@ func expand(argv []string, vals map[string]string) []string {
 	return out
 }
 
-// Run executes wf's steps sequentially with workdir as the working
-// directory, announcing each step on progress ("[2/4] lint"). values are
-// the workflow's own argument values in [[args]] declaration order (the
-// same convention as scripts); steps receive them via ${key} placeholders.
-// onStep, when non-nil, is called right before each step starts (1-based
-// current, total, step name) so callers can mirror the progress elsewhere.
-// The first failure stops execution and the remaining steps are recorded
-// as skipped. Pre-flight validation failures are returned as an error
-// before any step runs; a failing step is not an error — it is reported
-// in the Result.
-func Run(st *store.Store, wf command.Command, workdir string, values []string, progress io.Writer, onStep func(current, total int, name string)) (*Result, error) {
+// Options configures one workflow run beyond the workflow itself.
+type Options struct {
+	// Workdir is the working directory every step runs in.
+	Workdir string
+	// Values are the workflow's own argument values in [[args]]
+	// declaration order (the same convention as scripts); steps receive
+	// them through ${key} placeholders.
+	Values []string
+	// Progress receives the per-step announcement ("[2/4] lint").
+	Progress io.Writer
+	// OnStep, when non-nil, is called right before each step starts
+	// (1-based current, total, step name) so callers can mirror the
+	// progress elsewhere.
+	OnStep func(current, total int, name string)
+	// Exec wires up each step's process: where its output goes and
+	// whether it gets a process group of its own. The zero value attaches
+	// the steps to exq's own terminal, which is what a synchronous run
+	// wants; a background job points them at its log file instead.
+	Exec runner.Options
+}
+
+// Run executes wf's steps sequentially, announcing each one on
+// opts.Progress. The first failure stops execution and the remaining
+// steps are recorded as skipped. Cancelling ctx terminates the step in
+// flight and skips the rest. Pre-flight validation failures are returned
+// as an error before any step runs; a failing step is not an error — it
+// is reported in the Result.
+func Run(ctx context.Context, st *store.Store, wf command.Command, opts Options) (*Result, error) {
 	steps, err := Resolve(st, wf)
 	if err != nil {
 		return nil, err
 	}
-	if len(values) > len(wf.Args) {
+	if len(opts.Values) > len(wf.Args) {
 		return nil, fmt.Errorf("workflow %q accepts at most %d argument(s), got %d",
-			wf.Name, len(wf.Args), len(values))
+			wf.Name, len(wf.Args), len(opts.Values))
 	}
 	vals := map[string]string{}
 	for i, a := range wf.Args {
 		v := ""
-		if i < len(values) {
-			v = values[i]
+		if i < len(opts.Values) {
+			v = opts.Values[i]
 		}
 		vals[a.Key] = v
 	}
@@ -161,12 +179,12 @@ func Run(st *store.Store, wf command.Command, workdir string, values []string, p
 			res.Steps = append(res.Steps, StepResult{Name: s.Command.Name, Status: StatusSkipped})
 			continue
 		}
-		fmt.Fprintf(progress, "[%d/%d] %s\n", i+1, len(steps), s.Command.Name)
-		if onStep != nil {
-			onStep(i+1, len(steps), s.Command.Name)
+		fmt.Fprintf(opts.Progress, "[%d/%d] %s\n", i+1, len(steps), s.Command.Name)
+		if opts.OnStep != nil {
+			opts.OnStep(i+1, len(steps), s.Command.Name)
 		}
 		start := time.Now()
-		code, runErr := runner.Run(s.Command, workdir, expand(s.argv, vals))
+		code, runErr := runner.RunWith(ctx, s.Command, opts.Workdir, expand(s.argv, vals), opts.Exec)
 		sr := StepResult{Name: s.Command.Name, ExitCode: code, Duration: time.Since(start)}
 		switch {
 		case runErr != nil:
@@ -177,8 +195,30 @@ func Run(st *store.Store, wf command.Command, workdir string, values []string, p
 			sr.Status = StatusSuccess
 		}
 		res.Steps = append(res.Steps, sr)
+		// A cancelled run has nothing left to say: the remaining steps
+		// are skipped rather than started and killed one by one.
+		if ctx.Err() != nil {
+			failed = true
+		}
 	}
 	return res, nil
+}
+
+// Report writes the post-run summary of wf to out and returns the exit
+// code the run should end with. The CLI and exqd share it so a workflow
+// reads the same whether it ran in a terminal or into a job log.
+func Report(out io.Writer, wf command.Command, res *Result) int {
+	fmt.Fprintln(out)
+	fmt.Fprint(out, Summary(res))
+	fmt.Fprintln(out)
+	if f := res.Failed(); f != nil {
+		fmt.Fprintf(out, "workflow %s failed at step %s\n", wf.Name, f.Name)
+		// A step that never started has no exit code of its own, so the
+		// workflow still has to fail with something non-zero.
+		return max(f.ExitCode, 1)
+	}
+	fmt.Fprintf(out, "workflow %s: all %d steps succeeded\n", wf.Name, len(res.Steps))
+	return 0
 }
 
 // Summary renders the per-step outcome table shown after a run:

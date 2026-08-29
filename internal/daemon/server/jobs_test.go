@@ -394,3 +394,120 @@ func readFileOrEmpty(path string) string {
 	}
 	return string(data)
 }
+
+// newWorkflow adds a workflow directory (command.toml only) to a project
+// created by newProject.
+func newWorkflow(t *testing.T, root, name, meta string) {
+	t.Helper()
+	st, err := store.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(st.WorkflowsDir(), name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, command.MetaFile), []byte(meta), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSubmitRunsWorkflowIntoTheJobLog(t *testing.T) {
+	root := newProject(t, map[string]string{
+		"one": "#!/bin/sh\necho step-one\n",
+		"two": "#!/bin/sh\necho step-two\n",
+	})
+	newWorkflow(t, root, "both", "steps = [\"one\", \"two\"]\n")
+	j := newJobs(t)
+
+	info, err := j.Submit(daemon.JobSpec{ProjectDir: root, Workdir: root, Name: "both"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := waitState(t, j, info.ID)
+	if done.State != daemon.JobSucceeded {
+		t.Fatalf("job = %q reason %q, want succeeded", done.State, done.Reason)
+	}
+	log := j.logOf(t, info.ID)
+	for _, want := range []string{"[1/2] one", "step-one", "[2/2] two", "step-two", "all 2 steps succeeded"} {
+		if !strings.Contains(log, want) {
+			t.Fatalf("log %q is missing %q", log, want)
+		}
+	}
+}
+
+func TestWorkflowJobTakesTheFailingStepsExitCode(t *testing.T) {
+	root := newProject(t, map[string]string{
+		"ok":   "#!/bin/sh\n",
+		"bad":  "#!/bin/sh\nexit 4\n",
+		"last": "#!/bin/sh\necho never\n",
+	})
+	newWorkflow(t, root, "flow", "steps = [\"ok\", \"bad\", \"last\"]\n")
+	j := newJobs(t)
+
+	info, err := j.Submit(daemon.JobSpec{ProjectDir: root, Workdir: root, Name: "flow"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := waitState(t, j, info.ID)
+	if done.State != daemon.JobFailed || done.ExitCode != 4 {
+		t.Fatalf("job = %q exit %d, want failed exit 4", done.State, done.ExitCode)
+	}
+	log := j.logOf(t, info.ID)
+	if !strings.Contains(log, "failed at step bad") {
+		t.Fatalf("log %q does not name the failing step", log)
+	}
+	if !strings.Contains(log, "- last") {
+		t.Fatalf("log %q does not show the skipped step in the summary", log)
+	}
+	if strings.Contains(log, "never") {
+		t.Fatalf("log %q shows output of a step that should have been skipped", log)
+	}
+}
+
+func TestWorkflowJobFailsPreFlightWithoutRunningAnything(t *testing.T) {
+	root := newProject(t, nil)
+	newWorkflow(t, root, "flow", "steps = [\"ghost\"]\n")
+	j := newJobs(t)
+
+	info, err := j.Submit(daemon.JobSpec{ProjectDir: root, Workdir: root, Name: "flow"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := waitState(t, j, info.ID)
+	if done.State != daemon.JobFailed || !strings.Contains(done.Reason, "ghost") {
+		t.Fatalf("job = %q reason %q, want failed naming the unknown step", done.State, done.Reason)
+	}
+}
+
+func TestStoppingAWorkflowJobSkipsTheRemainingSteps(t *testing.T) {
+	root := newProject(t, map[string]string{
+		"slow": "#!/bin/sh\necho running\nsleep 60\n",
+		"next": "#!/bin/sh\necho next-ran\n",
+	})
+	newWorkflow(t, root, "flow", "steps = [\"slow\", \"next\"]\n")
+	j := newJobs(t)
+
+	info, err := j.Submit(daemon.JobSpec{ProjectDir: root, Workdir: root, Name: "flow"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for !strings.Contains(readFileOrEmpty(j.logPath(info.ID)), "running") {
+		if time.Now().After(deadline) {
+			t.Fatal("first step never started")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if _, err := j.Stop(info.ID); err != nil {
+		t.Fatal(err)
+	}
+	done := waitState(t, j, info.ID)
+	if done.State != daemon.JobStopped {
+		t.Fatalf("job = %q, want stopped", done.State)
+	}
+	if log := j.logOf(t, info.ID); strings.Contains(log, "next-ran") {
+		t.Fatalf("log %q shows a step started after the stop", log)
+	}
+}

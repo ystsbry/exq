@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -146,24 +147,21 @@ func executeScript(errOut io.Writer, st *store.Store, c command.Command, values 
 // custom status, then idle once it is over.
 func executeWorkflow(out io.Writer, st *store.Store, c command.Command, values []string, rep *herdr.Reporter) error {
 	rep.Report(herdr.StateWorking, c.Name, "")
-	res, err := workflow.Run(st, c, st.Root, values, out, func(current, total int, name string) {
-		rep.Report(herdr.StateWorking, c.Name, fmt.Sprintf("step %d/%d %s", current, total, name))
+	res, err := workflow.Run(context.Background(), st, c, workflow.Options{
+		Workdir:  st.Root,
+		Values:   values,
+		Progress: out,
+		OnStep: func(current, total int, name string) {
+			rep.Report(herdr.StateWorking, c.Name, fmt.Sprintf("step %d/%d %s", current, total, name))
+		},
 	})
 	rep.Report(herdr.StateIdle, c.Name, "")
 	if err != nil {
 		return err
 	}
-
-	fmt.Fprintln(out)
-	fmt.Fprint(out, workflow.Summary(res))
-	fmt.Fprintln(out)
-	if f := res.Failed(); f != nil {
-		fmt.Fprintf(out, "workflow %s failed at step %s\n", c.Name, f.Name)
-		// A step that never started has no exit code of its own, so the
-		// workflow still has to fail with something non-zero.
-		return exitError{code: max(f.ExitCode, 1)}
+	if code := workflow.Report(out, c, res); code != 0 {
+		return exitError{code: code}
 	}
-	fmt.Fprintf(out, "workflow %s: all %d steps succeeded\n", c.Name, len(res.Steps))
 	return nil
 }
 
