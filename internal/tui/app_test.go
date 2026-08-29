@@ -180,10 +180,11 @@ func TestTabSwitchFiltersAndPreservesCursor(t *testing.T) {
 	if out.active != 0 || out.cursors[0] != 1 {
 		t.Errorf("active=%d cursors[0]=%d, want 0/1", out.active, out.cursors[0])
 	}
-	// Wrap-around: left from the first tab reaches the last.
+	// Wrap-around: left from the first tab reaches the last, which is
+	// the jobs tab.
 	out = step(t, out, key("left"))
-	if out.active != 1 {
-		t.Errorf("active = %d, want 1 (wrap)", out.active)
+	if want := out.jobsTab(); out.active != want {
+		t.Errorf("active = %d, want %d (wrap to the last tab)", out.active, want)
 	}
 }
 

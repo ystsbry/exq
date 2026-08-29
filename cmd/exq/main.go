@@ -93,7 +93,7 @@ func runTUI(out, errOut io.Writer) error {
 	}
 	rep := herdr.New()
 	rep.Report(herdr.StateIdle, "", "")
-	res, err := tui.Run(st)
+	res, err := tui.Run(st, tui.Deps{Jobs: daemonClient()})
 	if err != nil {
 		rep.Release()
 		return err

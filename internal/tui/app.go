@@ -1,10 +1,12 @@
 // Package tui provides the interactive command browser: a top tab bar
-// (scripts / workflows) with ←/→ switching, a per-tab list to pick a
-// command to execute (filling its declared arguments in a form), or
-// delete one. The program runs to completion and returns the command the
-// user chose to run plus the argument values (nil when they just quit);
-// actually executing it is left to the caller so the terminal is restored
-// before the command's output starts.
+// (scripts / workflows / jobs) with ←/→ switching, a per-tab list to pick
+// a command to execute (filling its declared arguments in a form), send
+// it to the background daemon, or delete it. The program runs to
+// completion and returns the command the user chose to run in the
+// foreground plus the argument values (nil when they just quit); actually
+// executing it is left to the caller so the terminal is restored before
+// the command's output starts. A background run needs no terminal, so it
+// happens inside the TUI and the browser stays open.
 package tui
 
 import (
@@ -17,6 +19,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/ystsbry/exq/internal/command"
+	"github.com/ystsbry/exq/internal/daemon"
 	"github.com/ystsbry/exq/internal/store"
 )
 
@@ -60,10 +63,26 @@ type Result struct {
 	Values  []string
 }
 
+// JobClient is the part of the exqd client the TUI needs: submitting a
+// background job and listing the jobs to show. It is an interface so the
+// TUI never has to have a reachable daemon to be testable.
+type JobClient interface {
+	Submit(daemon.JobSpec) (*daemon.JobInfo, error)
+	List() ([]daemon.JobInfo, error)
+}
+
+// Deps are the outside services the browser talks to. A zero Deps still
+// gives a working browser: the jobs tab then reports that the daemon is
+// unavailable instead of listing anything.
+type Deps struct {
+	Jobs JobClient
+}
+
 // Run shows the tabbed command browser until the user picks a command to
-// execute or quits. Commands with declared [[args]] go through an input
-// form first. Returns nil when the user quit without choosing.
-func Run(st *store.Store) (*Result, error) {
+// execute in the foreground or quits. Commands with declared [[args]] go
+// through an input form first. Returns nil when the user quit without
+// choosing.
+func Run(st *store.Store, deps Deps) (*Result, error) {
 	items, err := st.List()
 	if err != nil {
 		return nil, err
@@ -71,6 +90,8 @@ func Run(st *store.Store) (*Result, error) {
 	// Alt screen keeps the user's terminal intact: on quit the original
 	// screen is restored, so no TUI frame residue precedes command output.
 	m := newModel(st, items)
+	m.deps = deps
+	m = m.refreshJobs()
 	final, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
 	if err != nil {
 		return nil, err
@@ -91,16 +112,26 @@ const (
 	modeBrowse mode = iota
 	modeConfirmDelete
 	modeArgsForm
+	modeJobLog
 )
 
-// tabDef is one entry in the top tab bar. Both current tabs render the
-// command list filtered by kind; future tabs (logs, history, …) plug in
-// by appending a tabDef here and branching to their own view/update in
-// the model — the bar, ←/→ switching, and per-tab cursor bookkeeping are
-// already generic over the tab list.
+// tabContent says what a tab lists: commands of one kind, or the
+// background jobs, which come from the daemon rather than the store and
+// have their own view and key handling.
+type tabContent int
+
+const (
+	contentCommands tabContent = iota
+	contentJobs
+)
+
+// tabDef is one entry in the top tab bar. The bar, ←/→ switching, and
+// per-tab cursor bookkeeping are generic over the tab list; a tab only
+// has to say what it lists and how many rows it has.
 type tabDef struct {
-	title string
-	kind  command.Kind
+	title   string
+	content tabContent
+	kind    command.Kind // meaningful for contentCommands
 }
 
 type model struct {
@@ -120,12 +151,21 @@ type model struct {
 	formIdx int               // index into items of the command whose args form is open
 	inputs  []textinput.Model // one per Arg of that command
 	focus   int               // focused index in inputs
+
+	deps    Deps
+	jobs    []daemon.JobInfo
+	jobsErr string   // why the job list is unavailable, if it is
+	status  string   // one-line note about the last action (a submitted job)
+	logJob  string   // id of the job whose log is open
+	logLine []string // that job's log, split into lines
+	logOff  int      // first visible log line
 }
 
 func newModel(st *store.Store, items []command.Command) model {
 	tabs := []tabDef{
-		{title: command.KindScript.String(), kind: command.KindScript},
-		{title: command.KindWorkflow.String(), kind: command.KindWorkflow},
+		{title: command.KindScript.String(), content: contentCommands, kind: command.KindScript},
+		{title: command.KindWorkflow.String(), content: contentCommands, kind: command.KindWorkflow},
+		{title: "jobs", content: contentJobs},
 	}
 	return model{
 		store:   st,
@@ -139,7 +179,11 @@ func newModel(st *store.Store, items []command.Command) model {
 }
 
 // tabIdxs returns the indices into items that belong to the active tab.
+// The jobs tab lists no commands, so it yields nothing.
 func (m model) tabIdxs() []int {
+	if m.tabs[m.active].content != contentCommands {
+		return nil
+	}
 	var idxs []int
 	for i, it := range m.items {
 		if it.Kind == m.tabs[m.active].kind {
@@ -170,10 +214,24 @@ func (m model) kindCount(k command.Kind) int {
 	return n
 }
 
+// tabCount is how many rows a tab has, for its label in the bar and for
+// keeping the cursor in range.
+func (m model) tabCount(i int) int {
+	if m.tabs[i].content == contentJobs {
+		return len(m.jobs)
+	}
+	return m.kindCount(m.tabs[i].kind)
+}
+
+// rowCount is how many rows the active tab has.
+func (m model) rowCount() int {
+	return m.tabCount(m.active)
+}
+
 // clampCursors pulls every tab cursor back into range after items changed.
 func (m model) clampCursors() model {
-	for ti, t := range m.tabs {
-		n := m.kindCount(t.kind)
+	for ti := range m.tabs {
+		n := m.tabCount(ti)
 		if m.cursors[ti] >= n {
 			if n == 0 {
 				m.cursors[ti] = 0
@@ -201,6 +259,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateConfirmDelete(msg)
 		case modeArgsForm:
 			return m.updateArgsForm(msg)
+		case modeJobLog:
+			return m.updateJobLog(msg)
 		default:
 			return m.updateBrowse(msg)
 		}
@@ -210,6 +270,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) updateBrowse(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.errMsg = ""
+	if m.tabs[m.active].content == contentJobs {
+		return m.updateJobsTab(msg)
+	}
 	switch msg.String() {
 	case "ctrl+c", "q", "esc":
 		m.chosen = -1
@@ -223,13 +286,13 @@ func (m model) updateBrowse(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cursors[m.active]--
 		}
 	case "down", "j":
-		if m.cursors[m.active] < len(m.tabIdxs())-1 {
+		if m.cursors[m.active] < m.rowCount()-1 {
 			m.cursors[m.active]++
 		}
 	case "g":
 		m.cursors[m.active] = 0
 	case "G":
-		if n := len(m.tabIdxs()); n > 0 {
+		if n := m.rowCount(); n > 0 {
 			m.cursors[m.active] = n - 1
 		}
 	case "enter":
@@ -245,6 +308,12 @@ func (m model) updateBrowse(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.formIdx = idx
 		return m.enterArgsForm()
+	case "b":
+		if idx, ok := m.current(); ok {
+			// A background run needs no terminal, so it happens here and
+			// the browser stays open on the jobs tab to show it.
+			return m.submitBackground(idx, nil), nil
+		}
 	case "d":
 		if _, ok := m.current(); ok {
 			m.mode = modeConfirmDelete
@@ -302,12 +371,18 @@ func (m model) updateArgsForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.formIdx = -1
 		return m, nil
 	case "enter":
-		m.values = make([]string, len(m.inputs))
-		for i, in := range m.inputs {
-			m.values[i] = in.Value()
-		}
+		m.values = m.formValues()
 		m.chosen = m.formIdx
 		return m, tea.Quit
+	case "ctrl+b":
+		// The same submit as "b" in the list, with the values just
+		// filled in. Plain "b" cannot do it here — it is text input.
+		idx := m.formIdx
+		values := m.formValues()
+		m.mode = modeBrowse
+		m.inputs = nil
+		m.formIdx = -1
+		return m.submitBackground(idx, values), nil
 	case "tab", "down":
 		return m.focusInput(m.focus + 1), nil
 	case "shift+tab", "up":
@@ -316,6 +391,16 @@ func (m model) updateArgsForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.inputs[m.focus], cmd = m.inputs[m.focus].Update(msg)
 	return m, cmd
+}
+
+// formValues collects the argument values currently in the form, in
+// [[args]] declaration order.
+func (m model) formValues() []string {
+	values := make([]string, len(m.inputs))
+	for i, in := range m.inputs {
+		values[i] = in.Value()
+	}
+	return values
 }
 
 // focusInput moves focus to input i, wrapping around both ends.
@@ -329,17 +414,23 @@ func (m model) focusInput(i int) model {
 }
 
 func (m model) View() string {
-	if m.mode == modeArgsForm {
+	switch {
+	case m.mode == modeArgsForm:
 		return m.viewArgsForm()
+	case m.mode == modeJobLog:
+		return m.viewJobLog()
+	case m.tabs[m.active].content == contentJobs:
+		return m.viewJobs()
+	default:
+		return m.viewList()
 	}
-	return m.viewList()
 }
 
 // viewTabBar renders the boxed tabs, active one highlighted.
 func (m model) viewTabBar() string {
 	labels := make([]string, len(m.tabs))
 	for i, t := range m.tabs {
-		label := fmt.Sprintf("%s (%d)", t.title, m.kindCount(t.kind))
+		label := fmt.Sprintf("%s (%d)", t.title, m.tabCount(i))
 		if i == m.active {
 			labels[i] = activeTabStyle.Render(label)
 		} else {
@@ -392,6 +483,9 @@ func (m model) listBudget() int {
 	}
 	overhead := lipgloss.Height(m.viewTabBar()) + 2 + 2
 	if m.errMsg != "" {
+		overhead++
+	}
+	if m.status != "" {
 		overhead++
 	}
 	// Never clip below a whole card, however cramped the terminal is.
@@ -497,13 +591,17 @@ func (m model) viewList() string {
 		b.WriteString(warnStyle.Render("error: " + m.errMsg))
 		b.WriteString("\n")
 	}
+	if m.status != "" {
+		b.WriteString(dimStyle.Render(m.status))
+		b.WriteString("\n")
+	}
 	switch m.mode {
 	case modeConfirmDelete:
 		if idx, ok := m.current(); ok {
 			b.WriteString(warnStyle.Render(fmt.Sprintf("delete %q? [y/N]", m.items[idx].Name)))
 		}
 	default:
-		b.WriteString(helpStyle.Render("←/→: switch tab   ↑/↓ or j/k: move   enter: run   d: delete   q/esc: quit"))
+		b.WriteString(helpStyle.Render("←/→: switch tab   ↑/↓ or j/k: move   enter: run   b: background   d: delete   q/esc: quit"))
 	}
 	b.WriteString("\n")
 	return b.String()
@@ -540,7 +638,7 @@ func (m model) viewArgsForm() string {
 		}
 	}
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("tab/↑↓: move   enter: run (empty = \"\")   esc: back"))
+	b.WriteString(helpStyle.Render("tab/↑↓: move   enter: run (empty = \"\")   ctrl+b: background   esc: back"))
 	b.WriteString("\n")
 	return b.String()
 }
