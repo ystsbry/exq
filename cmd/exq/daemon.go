@@ -31,11 +31,18 @@ func daemonHint(err error) error {
 	return err
 }
 
-// submitJob hands one job to exqd and reports the outcome on out.
+// submitJob hands one job to exqd and reports the outcome on out. A
+// submit that exqd skipped — the previous run of the same schedule was
+// still going — is reported, not failed: the timer's oneshot service
+// did its job, so it has to exit cleanly.
 func submitJob(out io.Writer, spec daemon.JobSpec) error {
 	info, err := daemonClient().Submit(spec)
 	if err != nil {
 		return daemonHint(err)
+	}
+	if info.State == daemon.JobSkipped {
+		fmt.Fprintf(out, "%s not started: %s\n", spec.Name, info.Reason)
+		return nil
 	}
 	fmt.Fprintf(out, "submitted %s as job %s\n", spec.Name, info.ID)
 	fmt.Fprintf(out, "  exq logs %s -f   # follow the output\n", info.ID)
