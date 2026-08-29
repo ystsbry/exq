@@ -17,7 +17,7 @@ func newRemoveCmd() *cobra.Command {
 		Short:   "Delete a command",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := openStore()
+			st, err := openStoreFromWD()
 			if err != nil {
 				return err
 			}

@@ -5,7 +5,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ystsbry/exq/internal/command"
 	"github.com/ystsbry/exq/internal/herdr"
 )
 
@@ -22,7 +21,7 @@ declared in command.toml.`,
 			if err != nil {
 				return err
 			}
-			st, err := openStore()
+			st, err := openStoreFromWD()
 			if err != nil {
 				return err
 			}
@@ -30,11 +29,7 @@ declared in command.toml.`,
 			if err != nil {
 				return err
 			}
-			rep := herdr.New()
-			if c.Kind == command.KindWorkflow {
-				return executeWorkflow(st, c, values, rep)
-			}
-			return executeScript(st, c, values, rep)
+			return execute(cmd.OutOrStdout(), cmd.ErrOrStderr(), st, c, values, herdr.New())
 		},
 	}
 	return cmd

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -22,9 +24,26 @@ var (
 	date    = "unknown"
 )
 
+// exitError asks main for a specific exit status without any further
+// output: whoever returned it has already reported the failure in its own
+// words (the ✗ frame, the workflow summary), and a second "Error: …" line
+// would only repeat it.
+type exitError struct {
+	code int
+}
+
+func (e exitError) Error() string {
+	return fmt.Sprintf("exit status %d", e.code)
+}
+
+// main is the only place that calls os.Exit, so deferred cleanup anywhere
+// in the command tree still runs before the process ends.
 func main() {
-	root := newRootCmd()
-	if err := root.Execute(); err != nil {
+	if err := newRootCmd().Execute(); err != nil {
+		if exit, ok := errors.AsType[exitError](err); ok {
+			os.Exit(exit.code)
+		}
+		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
 }
@@ -39,11 +58,13 @@ so the commands stay local to your machine and never show up in the repo.
 
 Running exq with no arguments opens the interactive TUI: pick a command to
 run it, or delete one with "d".`,
-		SilenceUsage:  true,
-		SilenceErrors: false,
+		SilenceUsage: true,
+		// main reports errors itself so it can let an exitError through
+		// silently — the command has already said what went wrong.
+		SilenceErrors: true,
 		Args:          cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTUI()
+			return runTUI(cmd.OutOrStdout(), cmd.ErrOrStderr())
 		},
 	}
 	cmd.AddCommand(newVersionCmd())
@@ -59,8 +80,8 @@ run it, or delete one with "d".`,
 // TUI has released the terminal. While the TUI is open the pane reports
 // itself to herdr as idle; quitting without running anything releases the
 // agent row so nothing lingers in the sidebar.
-func runTUI() error {
-	st, err := openStore()
+func runTUI(out, errOut io.Writer) error {
+	st, err := openStoreFromWD()
 	if err != nil {
 		return err
 	}
@@ -75,80 +96,81 @@ func runTUI() error {
 		rep.Release()
 		return nil
 	}
-	if res.Command.Kind == command.KindWorkflow {
-		return executeWorkflow(st, res.Command, res.Values, rep)
-	}
-	return executeScript(st, res.Command, res.Values, rep)
+	return execute(out, errOut, st, res.Command, res.Values, rep)
 }
 
-// executeScript runs a script with a stderr frame around its raw output
+// execute runs one picked command, dispatching on its kind. Scripts and
+// workflows report progress differently, so the two paths stay separate
+// past this point.
+func execute(out, errOut io.Writer, st *store.Store, c command.Command, values []string, rep *herdr.Reporter) error {
+	if c.Kind == command.KindWorkflow {
+		return executeWorkflow(out, st, c, values, rep)
+	}
+	return executeScript(errOut, st, c, values, rep)
+}
+
+// executeScript runs a script with a frame around its raw output
 // (▶ name … ✓/✗ name), so what ran and how it ended is always visible —
 // including after the TUI has restored the terminal. The frame goes to
-// stderr so piping the script's stdout stays clean. A non-zero script
-// exits exq with that code. The herdr reporter sees working while the
-// script runs and idle on every exit path — reported explicitly before
-// os.Exit, which would skip a defer.
-func executeScript(st *store.Store, c command.Command, values []string, rep *herdr.Reporter) error {
+// errOut (stderr in normal use) so piping the script's stdout stays clean.
+// A non-zero script comes back as an exitError carrying its code. The
+// herdr reporter sees working while the script runs and idle afterwards.
+func executeScript(errOut io.Writer, st *store.Store, c command.Command, values []string, rep *herdr.Reporter) error {
 	label := c.Name
 	if len(values) > 0 {
 		label += " " + strings.Join(values, " ")
 	}
 	rep.Report(herdr.StateWorking, label, "")
-	fmt.Fprintf(os.Stderr, "▶ %s\n", label)
+	fmt.Fprintf(errOut, "▶ %s\n", label)
+
 	start := time.Now()
 	code, err := runner.Run(c, st.Root, values)
-	if err != nil {
-		rep.Report(herdr.StateIdle, label, "")
-		return err
-	}
 	dur := time.Since(start).Seconds()
 	rep.Report(herdr.StateIdle, label, "")
-	if code != 0 {
-		fmt.Fprintf(os.Stderr, "✗ %s (%.1fs, exit %d)\n", c.Name, dur, code)
-		os.Exit(code)
+
+	if err != nil {
+		return err
 	}
-	fmt.Fprintf(os.Stderr, "✓ %s (%.1fs)\n", c.Name, dur)
+	if code != 0 {
+		fmt.Fprintf(errOut, "✗ %s (%.1fs, exit %d)\n", c.Name, dur, code)
+		return exitError{code: code}
+	}
+	fmt.Fprintf(errOut, "✓ %s (%.1fs)\n", c.Name, dur)
 	return nil
 }
 
-// executeWorkflow runs a workflow with progress on stdout and prints the
-// per-step summary. A failing step makes exq exit with that step's exit
-// code; pre-flight validation failures are returned as a plain error.
-// The herdr reporter mirrors the run: working with per-step progress in
-// the custom status, then idle on every exit path — reported explicitly
-// before os.Exit, which would skip a defer.
-func executeWorkflow(st *store.Store, c command.Command, values []string, rep *herdr.Reporter) error {
+// executeWorkflow runs a workflow with progress and the per-step summary
+// on out. A failing step comes back as an exitError carrying that step's
+// code; pre-flight validation failures are returned as a plain error. The
+// herdr reporter mirrors the run: working with per-step progress in the
+// custom status, then idle once it is over.
+func executeWorkflow(out io.Writer, st *store.Store, c command.Command, values []string, rep *herdr.Reporter) error {
 	rep.Report(herdr.StateWorking, c.Name, "")
-	res, err := workflow.Run(st, c, st.Root, values, os.Stdout, func(current, total int, name string) {
+	res, err := workflow.Run(st, c, st.Root, values, out, func(current, total int, name string) {
 		rep.Report(herdr.StateWorking, c.Name, fmt.Sprintf("step %d/%d %s", current, total, name))
 	})
 	rep.Report(herdr.StateIdle, c.Name, "")
 	if err != nil {
 		return err
 	}
-	fmt.Println()
-	fmt.Print(workflow.Summary(res))
-	fmt.Println()
+
+	fmt.Fprintln(out)
+	fmt.Fprint(out, workflow.Summary(res))
+	fmt.Fprintln(out)
 	if f := res.Failed(); f != nil {
-		fmt.Printf("workflow %s failed at step %s\n", c.Name, f.Name)
-		code := f.ExitCode
-		if code <= 0 {
-			code = 1
-		}
-		os.Exit(code)
+		fmt.Fprintf(out, "workflow %s failed at step %s\n", c.Name, f.Name)
+		// A step that never started has no exit code of its own, so the
+		// workflow still has to fail with something non-zero.
+		return exitError{code: max(f.ExitCode, 1)}
 	}
-	fmt.Printf("workflow %s: all %d steps succeeded\n", c.Name, len(res.Steps))
+	fmt.Fprintf(out, "workflow %s: all %d steps succeeded\n", c.Name, len(res.Steps))
 	return nil
 }
 
-// openStore opens the store rooted at the cwd, failing early with a hint
-// when exq init has not been run yet.
-func openStore() (*store.Store, error) {
-	wd, err := os.Getwd()
-	if err != nil {
-		return nil, err
-	}
-	st, err := store.Open(wd)
+// openStore opens the store rooted at dir, failing early with a hint when
+// exq init has not been run yet.
+func openStore(dir string) (*store.Store, error) {
+	st, err := store.Open(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -156,6 +178,16 @@ func openStore() (*store.Store, error) {
 		return nil, fmt.Errorf("%s not found — run `exq init` first", st.Dir())
 	}
 	return st, nil
+}
+
+// openStoreFromWD opens the store rooted at the directory exq was invoked
+// from, which is where commands are looked up and run.
+func openStoreFromWD() (*store.Store, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+	return openStore(wd)
 }
 
 func newVersionCmd() *cobra.Command {

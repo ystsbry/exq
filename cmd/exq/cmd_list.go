@@ -16,7 +16,7 @@ func newListCmd() *cobra.Command {
 		Short:   "List available commands",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := openStore()
+			st, err := openStoreFromWD()
 			if err != nil {
 				return err
 			}
