@@ -73,6 +73,7 @@ run it, or delete one with "d".`,
 	cmd.AddCommand(newListCmd())
 	cmd.AddCommand(newRunCmd())
 	cmd.AddCommand(newRemoveCmd())
+	cmd.AddCommand(newDaemonCmd())
 	cmd.AddCommand(newJobsCmd())
 	cmd.AddCommand(newLogsCmd())
 	cmd.AddCommand(newStopCmd())
