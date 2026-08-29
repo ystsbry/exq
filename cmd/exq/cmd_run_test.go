@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -47,18 +48,43 @@ func TestRunCommandExecutesScript(t *testing.T) {
 	st := newStore(t)
 	addScript(t, st, "greet", "", "#!/bin/sh\necho hello\n")
 
+	var out string
 	var err error
-	stdout, stderr := captureStd(t, func() {
-		_, err = run(t, "", "run", "greet")
+	stdout, _ := captureStd(t, func() {
+		out, err = run(t, "", "run", "greet")
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The script writes to the terminal; the frame goes to the command's
+	// own error writer.
 	if !strings.Contains(stdout, "hello") {
 		t.Errorf("script output missing:\n%s", stdout)
 	}
-	if !strings.Contains(stderr, "✓ greet") {
-		t.Errorf("success frame missing:\n%s", stderr)
+	if !strings.Contains(out, "✓ greet") {
+		t.Errorf("success frame missing:\n%s", out)
+	}
+}
+
+func TestRunCommandPropagatesTheScriptsExitCode(t *testing.T) {
+	st := newStore(t)
+	addScript(t, st, "boom", "", "#!/bin/sh\nexit 7\n")
+
+	var out string
+	var err error
+	captureStd(t, func() {
+		out, err = run(t, "", "run", "boom")
+	})
+
+	exit, ok := errors.AsType[exitError](err)
+	if !ok {
+		t.Fatalf("run = %v, want an exitError", err)
+	}
+	if exit.code != 7 {
+		t.Errorf("exit code = %d, want 7", exit.code)
+	}
+	if !strings.Contains(out, "✗ boom") {
+		t.Errorf("failure frame missing:\n%s", out)
 	}
 }
 
@@ -88,15 +114,16 @@ func TestRunCommandExecutesWorkflow(t *testing.T) {
 	addScript(t, st, "first", "", "#!/bin/sh\necho one\n")
 	addEntry(t, st.WorkflowsDir(), "flow", "steps = [\"first\"]\n")
 
+	var out string
 	var err error
-	stdout, _ := captureStd(t, func() {
-		_, err = run(t, "", "run", "flow")
+	captureStd(t, func() {
+		out, err = run(t, "", "run", "flow")
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout, "workflow flow: all 1 steps succeeded") {
-		t.Errorf("workflow summary missing:\n%s", stdout)
+	if !strings.Contains(out, "workflow flow: all 1 steps succeeded") {
+		t.Errorf("workflow summary missing:\n%s", out)
 	}
 }
 

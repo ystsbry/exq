@@ -137,10 +137,7 @@ is rendered to stdout instead — no TTY or key input needed.`,
 				rep.Release()
 				return nil
 			}
-			if res.Command.Kind == command.KindWorkflow {
-				return executeWorkflow(st, res.Command, res.Values, rep)
-			}
-			return executeScript(st, res.Command, res.Values, rep)
+			return execute(cmd.OutOrStdout(), cmd.ErrOrStderr(), st, res.Command, res.Values, rep)
 		},
 	}
 	cmd.Flags().BoolVar(&empty, "empty", false, "start with no commands (empty state)")
