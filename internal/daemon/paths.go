@@ -1,6 +1,10 @@
 package daemon
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 )
@@ -44,4 +48,26 @@ func JobDir(id string) string {
 // JobLogPath returns the log file of a single job.
 func JobLogPath(id string) string {
 	return filepath.Join(JobDir(id), LogFile)
+}
+
+// ReadJobRecord loads the persisted record of one job straight from the
+// state directory. Job history survives the daemon, so reading it does
+// not need exqd to be running — which is exactly the situation in which
+// someone wants to know how the last job ended.
+func ReadJobRecord(id string) (*JobInfo, error) {
+	if id == "" || filepath.Base(id) != id {
+		return nil, fmt.Errorf("invalid job id %q", id)
+	}
+	data, err := os.ReadFile(filepath.Join(JobDir(id), RecordFile))
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("job %q not found under %s", id, JobsDir())
+		}
+		return nil, err
+	}
+	var info JobInfo
+	if err := json.Unmarshal(data, &info); err != nil {
+		return nil, fmt.Errorf("job %q: malformed record: %w", id, err)
+	}
+	return &info, nil
 }
