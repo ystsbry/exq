@@ -10,4 +10,3 @@
 
 - トピック別のルールは `.claude/rules/<topic>.md` に 1 ファイル 1 トピックで置く
 - 特定パスの編集時だけ効かせたいルールは、frontmatter の `paths:`（glob パターン）で適用範囲を指定する
-- この CLAUDE.md には概要とポインタのみを書き、ルール本文は `.claude/rules/` に置く（rules は自動で読み込まれるため、一覧を CLAUDE.md に書かない）
