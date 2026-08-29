@@ -1,4 +1,4 @@
-description = "ビルド済み bin/exq を配置する（ビルドはしない）"
+description = "ビルド済み bin/exq・bin/exqd を配置する（ビルドはしない）"
 
 [[args]]
 key = "prefix"

@@ -33,8 +33,32 @@ builds:
       - -X main.commit={{.Commit}}
       - -X main.date={{.Date}}
 
+  # exqd はバックグラウンドジョブ実行デーモン。exq と同じアーカイブに同梱し、
+  # `exq daemon install` が systemd user unit として起動する。
+  - id: exqd
+    main: ./cmd/exqd
+    binary: exqd
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
 archives:
   - id: exq
+    ids:
+      - exq
+      - exqd
     name_template: "exq_{{.Version}}_{{.Os}}_{{.Arch}}"
     formats:
       - tar.gz

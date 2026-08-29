@@ -1,10 +1,13 @@
 package runner
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/ystsbry/exq/internal/command"
 )
@@ -155,4 +158,95 @@ func TestRunUsesWorkdirNotCommandDir(t *testing.T) {
 	if got != want {
 		t.Errorf("working directory = %q, want %q", got, want)
 	}
+}
+
+func TestRunWithRedirectsStreams(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "chatty")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\necho out\necho err >&2\ncat\n"
+	if err := os.WriteFile(filepath.Join(dir, command.RunFile), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr strings.Builder
+	code, err := RunWith(t.Context(), command.Load(dir), base, nil, Options{
+		Stdin:  strings.NewReader(""),
+		Stdout: &stdout,
+		Stderr: &stderr,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 {
+		t.Fatalf("exit code = %d", code)
+	}
+	if got := stdout.String(); !strings.Contains(got, "out") {
+		t.Fatalf("stdout = %q, want it to carry the script's stdout", got)
+	}
+	if got := stderr.String(); !strings.Contains(got, "err") {
+		t.Fatalf("stderr = %q, want it to carry the script's stderr", got)
+	}
+}
+
+func TestRunWithCancellationStopsTheProcessGroup(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "sleeper")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The backgrounded sleep shares the group, so only a group-wide
+	// signal ends the run promptly.
+	script := "#!/bin/sh\nsleep 60 &\necho up\nwait\n"
+	if err := os.WriteFile(filepath.Join(dir, command.RunFile), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	var out lockedBuilder
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = RunWith(ctx, command.Load(dir), base, nil, Options{
+			Stdin:  strings.NewReader(""),
+			Stdout: &out,
+			Stderr: &out,
+			Group:  true,
+		})
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for !strings.Contains(out.String(), "up") {
+		if time.Now().After(deadline) {
+			t.Fatal("script never started")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("cancelled run did not return")
+	}
+}
+
+// lockedBuilder is a strings.Builder the test can read while the command
+// is still writing into it.
+type lockedBuilder struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *lockedBuilder) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuilder) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
 }
