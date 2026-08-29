@@ -164,6 +164,7 @@ func TestResolveValidation(t *testing.T) {
 	st := newStore(t)
 	addScript(t, st, "ok", 0)
 	addWorkflow(t, st, "inner", []string{"ok"})
+	addRawScript(t, st, "chmodless", "#!/bin/sh\n", 0o644)
 
 	tests := []struct {
 		name    string
@@ -185,6 +186,16 @@ func TestResolveValidation(t *testing.T) {
 			wf:      addWorkflow(t, st, "nested", []string{"inner"}),
 			wantErr: "nesting is not supported",
 		},
+		{
+			name:    "blank step entry",
+			wf:      addWorkflow(t, st, "blank", []string{"ok", "   "}),
+			wantErr: "empty step entry",
+		},
+		{
+			name:    "non-executable step",
+			wf:      addWorkflow(t, st, "unrunnable", []string{"chmodless"}),
+			wantErr: "not executable",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -193,6 +204,49 @@ func TestResolveValidation(t *testing.T) {
 				t.Errorf("Resolve error = %v, want containing %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestRunRecordsStepThatCannotStart(t *testing.T) {
+	st := newStore(t)
+	// Executable, so it passes pre-flight validation, but not a program:
+	// exec fails and the step has no exit code to report.
+	addRawScript(t, st, "not-a-program", "\x7fELF garbage", 0o755)
+	addScript(t, st, "after", 0)
+	wf := addWorkflow(t, st, "flow", []string{"not-a-program", "after"})
+
+	res, err := Run(st, wf, t.TempDir(), nil, &bytes.Buffer{}, nil)
+	// A step that cannot start is a step failure, not a workflow error.
+	if err != nil {
+		t.Fatalf("Run() err = %v, want nil", err)
+	}
+	failed := res.Failed()
+	if failed == nil {
+		t.Fatal("Failed() = nil, want the unstartable step")
+	}
+	if failed.Name != "not-a-program" || failed.Err == nil {
+		t.Errorf("failed step = %+v, want not-a-program with a start error", failed)
+	}
+	if res.Steps[1].Status != StatusSkipped {
+		t.Errorf("step after a failure = %v, want StatusSkipped", res.Steps[1].Status)
+	}
+
+	// The summary explains why, instead of printing a meaningless exit 0.
+	summary := Summary(res)
+	if !strings.Contains(summary, "✗ not-a-program") {
+		t.Errorf("summary should mark the step failed:\n%s", summary)
+	}
+	if strings.Contains(summary, "exit 0") {
+		t.Errorf("summary should show the start error, not an exit code:\n%s", summary)
+	}
+	if !strings.Contains(summary, "- after") {
+		t.Errorf("summary should mark the remaining step skipped:\n%s", summary)
+	}
+}
+
+func TestSummaryOfEmptyResultIsEmpty(t *testing.T) {
+	if got := Summary(&Result{}); got != "" {
+		t.Errorf("Summary() = %q, want empty", got)
 	}
 }
 
@@ -208,8 +262,8 @@ func TestResolveRejectsRunFileInWorkflow(t *testing.T) {
 	}
 }
 
-// addRawScript writes a script with the given body.
-func addRawScript(t *testing.T, st *store.Store, name, body string) {
+// addRawScript writes a script with the given run.sh body and mode.
+func addRawScript(t *testing.T, st *store.Store, name, body string, mode os.FileMode) {
 	t.Helper()
 	dir := filepath.Join(st.ScriptsDir(), name)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -218,14 +272,14 @@ func addRawScript(t *testing.T, st *store.Store, name, body string) {
 	if err := os.WriteFile(filepath.Join(dir, command.MetaFile), []byte("description = \""+name+"\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, command.RunFile), []byte(body), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, command.RunFile), []byte(body), mode); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestRunPassesArgsToSteps(t *testing.T) {
 	st := newStore(t)
-	addRawScript(t, st, "argdump", "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > args.txt\n")
+	addRawScript(t, st, "argdump", "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > args.txt\n", 0o755)
 	wf := addWorkflow(t, st, "flow",
 		[]string{"argdump ${prefix} literal --p=${prefix}"}, "prefix")
 
@@ -251,7 +305,7 @@ func TestRunPassesArgsToSteps(t *testing.T) {
 
 func TestRunMissingValueBecomesEmpty(t *testing.T) {
 	st := newStore(t)
-	addRawScript(t, st, "argdump", "#!/bin/sh\nprintf '[%s]' \"$1\" > args.txt\n")
+	addRawScript(t, st, "argdump", "#!/bin/sh\nprintf '[%s]' \"$1\" > args.txt\n", 0o755)
 	wf := addWorkflow(t, st, "flow", []string{"argdump ${prefix}"}, "prefix")
 
 	var progress bytes.Buffer

@@ -2,6 +2,7 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -39,5 +40,92 @@ func TestSplitRunArgs(t *testing.T) {
 				t.Errorf("got (%q, %v), want (%q, %v)", n, v, tt.wantN, tt.wantV)
 			}
 		})
+	}
+}
+
+func TestRunCommandExecutesScript(t *testing.T) {
+	st := newStore(t)
+	addScript(t, st, "greet", "", "#!/bin/sh\necho hello\n")
+
+	var err error
+	stdout, stderr := captureStd(t, func() {
+		_, err = run(t, "", "run", "greet")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "hello") {
+		t.Errorf("script output missing:\n%s", stdout)
+	}
+	if !strings.Contains(stderr, "✓ greet") {
+		t.Errorf("success frame missing:\n%s", stderr)
+	}
+}
+
+func TestRunCommandPassesValuesAfterDash(t *testing.T) {
+	st := newStore(t)
+	addScript(t, st, "argdump", `description = "echo its arguments"
+
+[[args]]
+key = "env"
+`, "#!/bin/sh\nfor a in \"$@\"; do printf '[%s]' \"$a\"; done\necho\n")
+
+	var err error
+	stdout, _ := captureStd(t, func() {
+		_, err = run(t, "", "run", "argdump", "--", "prod", "a b")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Values reach run.sh verbatim: spaces stay inside one argument.
+	if !strings.Contains(stdout, "[prod][a b]") {
+		t.Errorf("arguments not passed through:\n%s", stdout)
+	}
+}
+
+func TestRunCommandExecutesWorkflow(t *testing.T) {
+	st := newStore(t)
+	addScript(t, st, "first", "", "#!/bin/sh\necho one\n")
+	addEntry(t, st.WorkflowsDir(), "flow", "steps = [\"first\"]\n")
+
+	var err error
+	stdout, _ := captureStd(t, func() {
+		_, err = run(t, "", "run", "flow")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "workflow flow: all 1 steps succeeded") {
+		t.Errorf("workflow summary missing:\n%s", stdout)
+	}
+}
+
+func TestRunCommandUnknownNameFails(t *testing.T) {
+	newStore(t)
+
+	if _, err := run(t, "", "run", "nope"); err == nil {
+		t.Error("running a missing command should fail")
+	}
+}
+
+func TestRunCommandRequiresAName(t *testing.T) {
+	newStore(t)
+
+	if _, err := run(t, "", "run"); err == nil {
+		t.Error("run without a command name should fail")
+	}
+}
+
+func TestRunCommandRejectsExtraArgsWithoutDash(t *testing.T) {
+	st := newStore(t)
+	addScript(t, st, "greet", "", "#!/bin/sh\n")
+
+	_, err := run(t, "", "run", "greet", "prod")
+	if err == nil {
+		t.Fatal("extra positionals without \"--\" should fail")
+	}
+	// The message has to show the corrected invocation.
+	if !strings.Contains(err.Error(), `exq run greet -- prod`) {
+		t.Errorf("error %v should suggest the \"--\" form", err)
 	}
 }
