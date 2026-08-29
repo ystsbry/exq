@@ -6,4 +6,5 @@ cd "$(git rev-parse --show-toplevel)"
 export CGO_ENABLED="${CGO_ENABLED:-0}"
 mkdir -p bin
 go build -o bin/exq ./cmd/exq
-echo "Built bin/exq"
+go build -o bin/exqd ./cmd/exqd
+echo "Built bin/exq and bin/exqd"
