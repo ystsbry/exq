@@ -10,10 +10,4 @@
 
 - トピック別のルールは `.claude/rules/<topic>.md` に 1 ファイル 1 トピックで置く
 - 特定パスの編集時だけ効かせたいルールは、frontmatter の `paths:`（glob パターン）で適用範囲を指定する
-- この CLAUDE.md には概要とポインタのみを書き、ルール本文は `.claude/rules/` に置く
-
-## ルール一覧
-
-- `.claude/rules/skills.md`: スキルの配置規約（ユーザー配布物と開発者専用の使い分け・SKILL.md の書式）
-- `.claude/rules/branch-naming.md`: ブランチ命名規約（`<type>/<kebab-case>` 形式）
-- `.claude/rules/commit-message.md`: コミットメッセージ規約（Conventional Commits・日本語）
+- この CLAUDE.md には概要とポインタのみを書き、ルール本文は `.claude/rules/` に置く（rules は自動で読み込まれるため、一覧を CLAUDE.md に書かない）
