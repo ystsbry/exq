@@ -27,7 +27,10 @@ func TestSnapshotsRenderAllStates(t *testing.T) {
 		byName[s.Name] = s.View
 	}
 
-	for _, want := range []string{"browse", "browse-workflows", "browse-empty", "confirm-delete", "args-form", "error"} {
+	for _, want := range []string{
+		"browse", "browse-workflows", "browse-jobs", "browse-jobs-unavailable",
+		"job-log", "browse-empty", "confirm-delete", "args-form", "error",
+	} {
 		if _, ok := byName[want]; !ok {
 			t.Errorf("missing snapshot %q", want)
 		}
@@ -52,6 +55,18 @@ func TestSnapshotsRenderAllStates(t *testing.T) {
 	}
 	if !strings.Contains(byName["error"], "permission denied") {
 		t.Errorf("error snapshot should show the error:\n%s", byName["error"])
+	}
+	// The jobs fixtures exist to show every state a row can be in at once.
+	for _, want := range []string{"running", "succeeded", "failed", "skipped"} {
+		if !strings.Contains(byName["browse-jobs"], want) {
+			t.Errorf("jobs snapshot should show a %s job:\n%s", want, byName["browse-jobs"])
+		}
+	}
+	if !strings.Contains(byName["browse-jobs-unavailable"], "exq daemon install") {
+		t.Errorf("unavailable-daemon snapshot should point at the fix:\n%s", byName["browse-jobs-unavailable"])
+	}
+	if !strings.Contains(byName["job-log"], "all 2 steps succeeded") {
+		t.Errorf("job-log snapshot should show log content:\n%s", byName["job-log"])
 	}
 }
 
