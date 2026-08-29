@@ -104,4 +104,6 @@ jobs:
             echo "::error::review draft not found under $dir (claude が下書きを生成していない可能性があります)"
             exit 1
           fi
-          revu submit --yes --accept-pending "$dir"
+          # --no-approve: Actions の GITHUB_TOKEN は PR を承認できない（HTTP 422）ため
+          # APPROVE 判定のレビューは COMMENT に落として投稿する
+          revu submit --yes --accept-pending --no-approve "$dir"
