@@ -8,22 +8,29 @@ Git 管理から除外されるため、`.gitignore` を汚さずに自分専用
 ## インストール
 
 ```sh
-bash .exq/scripts/install/run.sh                 # ~/.local/bin/exq にインストール
-bash .exq/scripts/install/run.sh /usr/local      # PREFIX を指定する場合
+bash .exq/scripts/build/run.sh                        # bin/exq と bin/exqd をビルド
+bash .exq/scripts/install-bin/run.sh                  # ~/.local/bin へ配置
+bash .exq/scripts/install-bin/run.sh /usr/local       # PREFIX を指定する場合
 ```
 
+`exq` は CLI / TUI 本体、`exqd` は[バックグラウンドジョブ](#バックグラウンド実行とスケジュール)を
+実行する常駐デーモン。バックグラウンド実行・スケジュール実行を使わないなら `exq` だけでよい。
+
 このリポジトリ自身の開発スクリプトも `.exq/` で管理している（dogfooding）。
-exq インストール後は `exq run install` などで同じスクリプトを TUI / CLI から実行できる。
+exq インストール後は `exq run build` などで同じスクリプトを TUI / CLI から実行できる。
 
 ## 使い方
 
 ```sh
 exq init                       # ./.exq/scripts と ./.exq/workflows を作成し、.git/info/exclude に .exq/ を追記
-exq                            # TUI を開く（←/→: scripts / workflows タブ切替, enter: 実行, d: 削除, q: 終了）
+exq                            # TUI を開く（←/→: タブ切替, enter: 実行, b: バックグラウンド, s: スケジュール, d: 削除, q: 終了）
 exq list                       # コマンド一覧
 exq run <name> [-- <values...>] # コマンドを実行（-- 以降は引数として $1, $2, ... に渡る）
 exq remove <name>              # コマンドを削除（-y で確認スキップ）
 ```
+
+バックグラウンド実行・スケジュール実行のコマンド（`exq run --bg` / `jobs` / `logs` /
+`stop` / `schedule` / `daemon`）は[後述](#バックグラウンド実行とスケジュール)。
 
 ## コマンドフォーマット
 
@@ -112,6 +119,94 @@ description = "インストール先 PREFIX（空なら ~/.local）"
 - **注意**: TOML の制約上、`steps` は `[[args]]` より**前**に書くこと（テーブルの後の
   トップレベルキーはテーブル側に解釈される）
 
+## バックグラウンド実行とスケジュール
+
+時間のかかるコマンドを投げっぱなしにしたり、定期実行したりできる。実体は
+デーモン `exqd` で、投入されたジョブを**自身の子プロセスとして実行する**ため、
+投入元の端末やペインを閉じてもジョブは走り続ける。
+
+```
+  exq (CLI/TUI) ─┐
+                 ├─ UNIX ソケット ─▶ exqd ─▶ .exq/scripts/<name>/run.sh
+  systemd timer ─┘                            （投入時のディレクトリで実行）
+  （スケジュール発火 = exq run --bg の自動実行）
+```
+
+「いつ動かすか」は exqd ではなく **systemd user timer** に任せている。スケジュール
+実行は「timer が代行してくれる手動バックグラウンド投入」に過ぎず、ジョブの状態・
+ログは手動投入とまったく同じ場所に集まる。
+
+### セットアップ
+
+```sh
+exq daemon install   # ~/.config/systemd/user/exqd.service を生成して起動
+exq daemon status    # unit の状態とソケットの疎通を確認
+exq daemon restart   # exq を入れ替えた後（バージョン不一致時）に実行
+```
+
+- systemd **user** unit として動く。ジョブは自分のリポジトリ・権限・環境で走り、
+  root 常駐は一切しない
+- **WSL2 では `/etc/wsl.conf` に `[boot] systemd=true` が必要**。
+  未設定の場合は `exq daemon install` が設定方法を添えて明示的に失敗する
+- ログアウト後もスケジュールを動かすには `loginctl enable-linger <user>` が必要
+  （`exq daemon install` が案内する）
+
+### バックグラウンド実行
+
+```sh
+exq run <name> --bg [-- <values...>]   # exqd に投入して job id を即返す
+exq jobs                               # ジョブ一覧（状態・開始時刻・所要時間）
+exq logs <job-id> [-f]                 # ログ閲覧（-f は tail -f 相当）
+exq stop <job-id>                      # 停止（プロセスグループに SIGTERM → 猶予後 SIGKILL）
+exq jobs --prune                       # 完了したジョブの記録とログを一括削除
+```
+
+TUI では scripts / workflows 一覧で **`b`**（引数フォーム内では `ctrl+b`）で投入し、
+**jobs タブ**で状態を確認できる（enter でログ表示、`r` で更新）。
+
+ジョブの状態とログは `~/.local/state/exq/jobs/<job-id>/`（`job.json` +
+`output.log`、`$XDG_STATE_HOME` 準拠）に残る。**ファイルとして残るため、
+exqd が止まっていても `exq logs` / `exq jobs --prune` は使える。**
+
+### スケジュール実行
+
+```sh
+exq schedule add <name> --on-calendar "<式>" [-- <values...>]
+exq schedule list                      # 登録済み一覧（次回発火時刻・直近の投入結果つき）
+exq schedule remove <id>               # 停止して unit を削除（-y で確認スキップ）
+```
+
+式は systemd の **OnCalendar 構文**をそのまま使う（cron 式ではない）:
+
+```sh
+exq schedule add test   --on-calendar "Mon..Fri 09:00"
+exq schedule add backup --on-calendar "daily"
+exq schedule add deploy --on-calendar "*-*-01 03:00" -- prod
+```
+
+- 登録時に `systemd-analyze calendar` で検証するので、書式ミスはその場で分かる
+- `~/.config/systemd/user/exq-sched-<id>.{timer,service}` を生成する。
+  **この unit ファイルが唯一の記録**であり、exq 側に別の登録簿は持たない
+  （`systemctl --user list-timers` で見えるものと食い違わない）
+- `Persistent=true` を付けているので、マシン停止中に逃した発火は次回起動時に 1 度だけ実行される
+
+TUI では scripts / workflows 一覧で **`s`** を押すと登録フォーム（OnCalendar 式 +
+`[[args]]` の値）が開き、**schedules タブ**で一覧・削除（`d`）・詳細（enter で
+生成された unit とジョブ履歴）を確認できる。
+
+### 注意点
+
+- **環境変数**: ジョブは端末のシェル環境ではなく **systemd user session の環境**で動く。
+  PATH や direnv 由来の変数は同期実行と異なりうるので、必要なものは `run.sh` 側で
+  読み込むこと
+- **exqd の再起動**: 再起動時に running のまま残っていたジョブは orphaned として
+  failed 扱いになる（子プロセスは systemd の cgroup ごと止まるため、再アタッチはしない）
+- **多重起動**: 同じスケジュールのジョブがまだ動いているときの発火はスキップされ、
+  `skipped` として履歴に残る（手動投入はスキップされない）
+- **プロジェクトの削除・移動**: timer は残り、発火のたびに作業ディレクトリ不在で失敗する。
+  `exq schedule list` が `(!)` で警告するので `exq schedule remove` で片付ける
+- **ログの肥大化**: 自動ローテーションはしない。`exq jobs --prune` で完了ジョブを掃除する
+
 ## Skill（コマンド生成の AI 支援）
 
 やりたいことを伝えると exq フォーマットのコマンドを生成する skill を同梱している。
@@ -156,7 +251,7 @@ exq run uninstall-codex
 開発用スクリプトは `.exq/scripts/` にコミットされており、exq 自身で実行する（dogfooding）。
 
 ```sh
-exq run build   # bin/exq をビルド
+exq run build   # bin/exq と bin/exqd をビルド
 exq run test    # go test ./...
 exq run vet     # go vet
 exq run fmt     # gofmt
@@ -185,6 +280,6 @@ PR を作成・更新すると、[revu](https://github.com/ystsbry/revu) ベー�
 ```sh
 exq demo              # サンプルデータ入りで TUI を起動
 exq demo --empty      # 空状態の表示を確認
-exq demo --snapshot   # 全 UI 状態（browse / empty / confirm-delete / error）を
-                      # stdout にレンダリングして終了（TTY 不要）
+exq demo --snapshot   # 全 UI 状態（browse / jobs / schedules / フォーム / empty /
+                      # confirm-delete / error）を stdout にレンダリングして終了（TTY 不要）
 ```
