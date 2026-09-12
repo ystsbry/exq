@@ -20,6 +20,8 @@ on:
       - '.github/**'
       - 'plugin/**'
       - '.agents/**'
+      # sandbox/ は exq の利用例であって本体のコードではない。
+      - 'sandbox/**'
 
 permissions:
   contents: write
